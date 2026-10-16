@@ -1,0 +1,14 @@
+services:
+  web:
+    build: .
+    container_name: poizon-pickup
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      BOT_TOKEN: ${BOT_TOKEN:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-local-demo-only}
+      PRONTO_RATE: ${PRONTO_RATE:-}
+      DATABASE_PATH: /data/orders.sqlite3
+    volumes:
+      - ./data:/data
+    restart: unless-stopped

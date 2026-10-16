@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#101418">
+  <title>POIZON PICKUP — расчёт заказа</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div class="brand-lockup">
+        <div class="brand-mark" aria-hidden="true">P</div>
+        <div><p class="eyebrow">Выкуп и доставка</p><h1>POIZON <span>PICKUP</span></h1></div>
+      </div>
+      <div class="rate-pill"><span id="rateCaption">Курс выкупа</span><strong id="rateDisplay">— ₽</strong><small id="rateNote">Pronto + 0,25 ₽</small></div>
+    </header>
+
+    <section class="intro">
+      <p class="eyebrow">Расчёт заказа</p>
+      <h2>Привезём оригинал<br>из Китая</h2>
+      <p>Выберите товар и узнайте сумму предоплаты за выкуп. Доставка оплачивается отдельно после взвешивания.</p>
+    </section>
+
+    <form id="orderForm" novalidate>
+      <section class="panel">
+        <div class="section-heading"><span class="step">01</span><div><h3>Что ищем?</h3><p>Выберите категорию товара</p></div></div>
+        <div class="category-grid" role="group" aria-label="Категория товара">
+          <button type="button" class="category-card selected" data-category="shoes" aria-pressed="true">
+            <span class="category-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 15.5c1.7-.1 3.5-.8 4.7-2.3l2-2.5 2.4 2.1c1.7 1.5 3.8 2.3 6 2.3H21v3.4H3zM8.2 13.3l1.7 1.3m3.5-.7 1.4 1.2"/></svg></span>
+            <span class="category-name">Обувь</span><span class="category-hint">Доставка ~2–3 тыс. ₽</span>
+          </button>
+          <button type="button" class="category-card" data-category="clothes" aria-pressed="false">
+            <span class="category-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m8 4-5 3 2 4 3-1v10h8V10l3 1 2-4-5-3c-.6 1.7-1.9 2.5-4 2.5S8.6 5.7 8 4Z"/></svg></span>
+            <span class="category-name">Одежда</span><span class="category-hint">Доставка ~1,2 тыс. ₽</span>
+          </button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-heading"><span class="step">02</span><div><h3>Данные товара</h3><p>Ссылка, цена и размер в сантиметрах</p></div></div>
+        <label class="field-label" for="productUrl">Ссылка на товар Poizon</label>
+        <input id="productUrl" name="product_url" type="url" inputmode="url" placeholder="https://..." autocomplete="url" required>
+        <div class="field-row">
+          <div><label class="field-label" for="priceCny">Цена на Poizon</label><div class="input-with-unit"><input id="priceCny" name="item_price_cny" type="number" min="1" step="0.01" value="599" inputmode="decimal" required><span>¥</span></div></div>
+          <div><label class="field-label" for="sizeCm">Длина стопы / стельки</label><div class="input-with-unit"><input id="sizeCm" name="size_cm" type="number" min="1" max="80" step="0.1" placeholder="Напр. 26,5" inputmode="decimal" required><span>см</span></div></div>
+        </div>
+        <p class="field-help">Размер подбирается строго по длине стопы или стельки (JP/CM).</p>
+        <label class="field-label" for="notes">Пожелания <span class="optional">необязательно</span></label>
+        <textarea id="notes" name="notes" rows="2" maxlength="1000" placeholder="Цвет, модель или другие детали"></textarea>
+      </section>
+
+      <section class="panel quote-panel" aria-live="polite">
+        <div class="section-heading"><span class="step">03</span><div><h3>Ваш расчёт</h3><p id="clientStatus">Новый клиент · комиссия 20%</p></div></div>
+        <div class="quote-rows">
+          <div><span>Товар по курсу</span><strong id="itemRub">—</strong></div>
+          <div><span id="commissionLabel">Комиссия и проверка</span><strong id="commissionRub">—</strong></div>
+        </div>
+        <div class="pay-now"><span>Предоплата за выкуп</span><strong id="upfrontTotal">—</strong></div>
+        <div class="shipping-note"><span class="shipping-dot" aria-hidden="true"></span><p><strong>Доставка по РФ — отдельно</strong><br><span id="deliveryEstimate">Уточняется после взвешивания на складе в Китае.</span> Срок Dobropost — 11–14 дней после отправки.</p></div>
+      </section>
+
+      <div class="policy"><strong>Пожалуйста, проверьте размер.</strong> После отправки из Китая возврат не принимается. Исключение — подтверждённый заводской брак, обнаруженный при проверке на складе Poizon.</div>
+      <p class="form-error" id="formError" role="alert" hidden></p>
+      <button class="submit-button" id="submitButton" type="submit"><span>Отправить заявку</span><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
+      <p class="submit-caption">Сейчас оплачиваются товар и комиссия. Доставка будет рассчитана отдельно по весу.</p>
+    </form>
+
+    <section class="success-card" id="successCard" hidden aria-live="polite">
+      <div class="success-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg></div>
+      <p class="eyebrow">Заявка принята</p><h2>Спасибо!</h2>
+      <p id="successMessage">Мы сохранили заявку и скоро свяжемся с вами.</p>
+      <div class="success-order">Номер заявки <strong id="successOrderId">—</strong></div>
+      <button type="button" class="secondary-button" id="newOrderButton">Оформить ещё одну</button>
+    </section>
+    <footer><span class="status-dot" aria-hidden="true"></span><span id="connectionStatus">Связь с POIZON PICKUP</span></footer>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>

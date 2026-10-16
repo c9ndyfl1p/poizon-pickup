@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Заявки — POIZON PICKUP</title><link rel="stylesheet" href="/static/styles.css">
+  <style>
+    body{padding:24px}.admin-shell{max-width:1120px;margin:auto}.admin-head{display:flex;justify-content:space-between;align-items:end;margin:12px 0 24px}.admin-head h1{font-size:28px;margin:0}.admin-table-wrap{overflow:auto;background:var(--surface);border:1px solid var(--line);border-radius:16px}table{border-collapse:collapse;width:100%;min-width:860px}th,td{text-align:left;padding:12px 14px;border-bottom:1px solid var(--line);font-size:12px;vertical-align:top}th{color:var(--muted);font-weight:700;background:#141a1f}td a{color:var(--accent)}.admin-empty{text-align:center;color:var(--muted);padding:30px}.order-pill{display:inline-block;padding:3px 7px;border-radius:99px;background:var(--accent-dark);color:var(--accent)}
+  </style>
+</head>
+<body><main class="admin-shell"><div class="brand-lockup"><div class="brand-mark" aria-hidden="true">P</div><div><p class="eyebrow">Панель менеджера</p><h1>POIZON <span style="color:var(--accent)">PICKUP</span></h1></div></div><header class="admin-head"><div><p class="eyebrow">Заказы</p><h1>Заявки клиентов</h1></div><button class="secondary-button" style="width:auto" id="refresh">Обновить</button></header><div class="admin-table-wrap"><table><thead><tr><th>Заказ</th><th>Клиент</th><th>Товар</th><th>Размер</th><th>К выкупу</th><th>Дата</th></tr></thead><tbody id="orders"><tr><td colspan="6" class="admin-empty">Загружаем заявки…</td></tr></tbody></table></div><p class="field-help">Первые два заказа идут по тарифу нового клиента, с третьего применяется тариф постоянного. Telegram ID записывается после проверки подписанных данных Mini App. Пустой ID означает, что заказ оформлен из локального браузера.</p></main><script src="/static/admin.js"></script></body></html>
