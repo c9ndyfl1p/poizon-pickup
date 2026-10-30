@@ -2,14 +2,22 @@ import os
 import re
 import io
 import json
-import shutil
+import sqlite3
 import datetime
+from contextlib import closing
+import hashlib
+import hmac
+import html
+import math
 import secrets
+import tempfile
+import time
 import xml.etree.ElementTree as ET
+from urllib.parse import parse_qsl, urlsplit
 import requests
 from dotenv import load_dotenv
 
-from fastapi import FastAPI, Depends, HTTPException, Request, Form, status, UploadFile, File
+from fastapi import FastAPI, Depends, HTTPException, Request, Form, Header, status, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -27,6 +35,7 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 # Load local configuration before reading environment-backed settings.
 load_dotenv()
@@ -37,6 +46,8 @@ WEBAPP_URL = os.getenv("WEBAPP_URL", "http://127.0.0.1:8001/")
 ENABLE_MARKETING_MESSAGES = os.getenv("ENABLE_MARKETING_MESSAGES", "false").lower() == "true"
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0"))
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "")
+PICKUP_SETTINGS_URL = os.getenv("POIZON_PICKUP_SETTINGS_URL", "").strip()
+BOT_SETTINGS_TOKEN = os.getenv("BOT_SETTINGS_TOKEN", "").strip()
 
 ADMIN_LOGIN = os.getenv("ADMIN_LOGIN", "")
 ADMIN_PASS = os.getenv("ADMIN_PASSWORD", "")
@@ -45,6 +56,7 @@ DEMO_PASS = os.getenv("DEMO_PASSWORD", "")
 
 ACTIVE_SESSIONS = {}
 LAST_ORDER_SUBMITS = {}
+ADMIN_LOGIN_ATTEMPTS = {}
 
 BACKUP_DIR = os.path.join(os.getcwd(), "backups")
 UPLOAD_DIR = os.path.join(os.getcwd(), "static", "uploads")
@@ -107,10 +119,15 @@ def download_telegram_photo(file_id: str) -> str:
         if r.get("ok"):
             file_path = r["result"]["file_path"]
             download_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
-            img_data = requests.get(download_url, timeout=15).content
-            
-            ext = os.path.splitext(file_path)[1] or ".jpg"
-            filename = f"rev_{secrets.token_hex(8)}{ext}"
+            with requests.get(download_url, timeout=15, stream=True) as response:
+                response.raise_for_status()
+                chunks = bytearray()
+                for chunk in response.iter_content(64 * 1024):
+                    chunks.extend(chunk)
+                    if len(chunks) > MAX_IMAGE_BYTES:
+                        return ""
+            img_data = normalize_image(bytes(chunks))
+            filename = f"rev_{secrets.token_hex(8)}.jpg"
             dest = os.path.join(UPLOAD_DIR, filename)
             with open(dest, "wb") as f:
                 f.write(img_data)
@@ -310,9 +327,17 @@ def get_db():
 def auto_backup_database():
     db_source = "database.db"
     if os.path.exists(db_source):
-        now_str = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        now_str = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")
         dest = os.path.join(BACKUP_DIR, f"backup_database_{now_str}.db")
-        shutil.copy2(db_source, dest)
+        with closing(sqlite3.connect(db_source)) as source, closing(sqlite3.connect(dest)) as target:
+            source.backup(target)
+        backups = sorted(
+            (os.path.join(BACKUP_DIR, name) for name in os.listdir(BACKUP_DIR) if name.startswith("backup_database_") and name.endswith(".db")),
+            key=os.path.getmtime,
+            reverse=True,
+        )
+        for stale in backups[30:]:
+            os.remove(stale)
 
 def background_marketing_triggers():
     db = SessionLocal()
@@ -384,9 +409,128 @@ app = FastAPI(title="PoizonPickUP")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="static")
 
+
+class RequestBodyLimitMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope.get("method") not in {"POST", "PUT", "PATCH"}:
+            await self.app(scope, receive, send)
+            return
+
+        path = scope.get("path", "")
+        if path == "/admin/backup/restore":
+            limit = 100 * 1024 * 1024 + 128 * 1024
+        elif path in {"/api/order/photo-order", "/admin/reviews/create"}:
+            limit = MAX_IMAGE_BYTES + 128 * 1024
+        else:
+            limit = 1024 * 1024
+
+        headers = dict(scope.get("headers", []))
+        try:
+            content_length = int(headers.get(b"content-length", b"0"))
+        except ValueError:
+            content_length = 0
+        if content_length > limit:
+            response = JSONResponse({"detail": "Размер запроса превышает допустимый лимит"}, status_code=413)
+            await response(scope, receive, send)
+            return
+
+        body_file = tempfile.SpooledTemporaryFile(max_size=1024 * 1024)
+        total = 0
+        try:
+            while True:
+                message = await receive()
+                if message["type"] == "http.disconnect":
+                    return
+                chunk = message.get("body", b"")
+                total += len(chunk)
+                if total > limit:
+                    response = JSONResponse({"detail": "Размер запроса превышает допустимый лимит"}, status_code=413)
+                    await response(scope, receive, send)
+                    return
+                body_file.write(chunk)
+                if not message.get("more_body", False):
+                    break
+
+            body_file.seek(0)
+
+            async def replay_body():
+                chunk = body_file.read(64 * 1024)
+                if chunk:
+                    return {"type": "http.request", "body": chunk, "more_body": body_file.tell() < total}
+                return {"type": "http.disconnect"}
+
+            await self.app(scope, replay_body, send)
+        finally:
+            body_file.close()
+
+
+app.add_middleware(RequestBodyLimitMiddleware)
+
 def clean_dewu_url(raw_text: str) -> str:
     match = re.search(r'(https?://[^\s]+)', raw_text)
     return match.group(0).split('?')[0] if match else raw_text.strip()
+
+
+MAX_IMAGE_BYTES = 5 * 1024 * 1024
+MAX_IMAGE_PIXELS = 20_000_000
+
+
+def normalize_image(contents: bytes) -> bytes:
+    try:
+        with Image.open(io.BytesIO(contents)) as source:
+            if source.format not in ("JPEG", "PNG", "WEBP"):
+                raise HTTPException(status_code=400, detail="Допустимы только JPEG, PNG или WEBP")
+            if source.width * source.height > MAX_IMAGE_PIXELS:
+                raise HTTPException(status_code=400, detail="Слишком большое разрешение изображения")
+            source.verify()
+        with Image.open(io.BytesIO(contents)) as source:
+            image = ImageOps.exif_transpose(source).convert("RGB")
+            output = io.BytesIO()
+            image.save(output, format="JPEG", quality=90, optimize=True)
+            return output.getvalue()
+    except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
+        raise HTTPException(status_code=400, detail="Файл не является корректным изображением") from exc
+
+
+async def read_image_upload(upload: UploadFile) -> bytes:
+    contents = await upload.read(MAX_IMAGE_BYTES + 1)
+    if len(contents) > MAX_IMAGE_BYTES:
+        raise HTTPException(status_code=413, detail="Размер изображения не должен превышать 5 МБ")
+    return normalize_image(contents)
+
+
+def validate_telegram_init_data(init_data: str) -> dict:
+    if not BOT_TOKEN:
+        raise HTTPException(status_code=503, detail="Telegram bot token is not configured")
+    if not init_data or len(init_data) > 4096:
+        raise HTTPException(status_code=401, detail="Откройте приложение из Telegram")
+    try:
+        pairs = parse_qsl(init_data, keep_blank_values=True, strict_parsing=True)
+        fields = dict(pairs)
+        if len(fields) != len(pairs):
+            raise ValueError("duplicate fields")
+        supplied_hash = fields.pop("hash")
+        auth_date = int(fields["auth_date"])
+        user = json.loads(fields["user"])
+        user_id = int(user["id"])
+    except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=401, detail="Некорректные данные Telegram") from exc
+    now = int(time.time())
+    if auth_date <= 0 or now - auth_date > 86_400 or auth_date > now + 30:
+        raise HTTPException(status_code=401, detail="Данные Telegram устарели")
+    check_string = "\n".join(f"{key}={value}" for key, value in sorted(fields.items()))
+    secret_key = hmac.new(b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256).digest()
+    expected = hmac.new(secret_key, check_string.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, supplied_hash) or user_id <= 0:
+        raise HTTPException(status_code=401, detail="Подпись Telegram недействительна")
+    return user
+
+
+def require_telegram_user(x_telegram_init_data: str | None = Header(default=None)) -> dict:
+    return validate_telegram_init_data(x_telegram_init_data or "")
 
 # --- ЛАЙКИ НА ОТЗЫВЫ ---
 @app.post("/api/reviews/like")
@@ -438,8 +582,8 @@ def generate_order_receipt_pdf(order: Order, user: User) -> bytes:
 
     info_data = [
         [Paragraph(f"<b>Заказ №:</b> #{order.id}", cell_style), Paragraph(f"<b>Дата:</b> {format_dt(order.created_at)}", cell_style)],
-        [Paragraph(f"<b>Клиент:</b> @{order.username}", cell_style), Paragraph(f"<b>Телефон:</b> {order.phone or '—'}", cell_style)],
-        [Paragraph(f"<b>ПВЗ СДЭК:</b> {order.cdek_pvz}", cell_style), Paragraph(f"<b>Оплата:</b> Подтверждена", cell_style)]
+        [Paragraph(f"<b>Клиент:</b> @{html.escape(str(order.username or ''), quote=False)}", cell_style), Paragraph(f"<b>Телефон:</b> {html.escape(str(order.phone or '—'), quote=False)}", cell_style)],
+        [Paragraph(f"<b>ПВЗ СДЭК:</b> {html.escape(str(order.cdek_pvz or '—'), quote=False)}", cell_style), Paragraph(f"<b>Оплата:</b> Подтверждена", cell_style)]
     ]
     t_info = Table(info_data, colWidths=[185, 185])
     t_info.setStyle(TableStyle([
@@ -459,7 +603,7 @@ def generate_order_receipt_pdf(order: Order, user: User) -> bytes:
     item_rows = [[Paragraph("<b>Товар / Размер</b>", cell_bold), Paragraph("<b>Dewu (¥)</b>", cell_bold), Paragraph("<b>Сумма (₽)</b>", cell_right_bold)]]
     for idx, it in enumerate(items):
         item_rows.append([
-            Paragraph(f"{idx+1}. {it.get('category')} ({it.get('size')})", cell_style),
+            Paragraph(f"{idx+1}. {html.escape(str(it.get('category', 'Товар')), quote=False)} ({html.escape(str(it.get('size', '—')), quote=False)})", cell_style),
             Paragraph(f"{it.get('price_cny')} ¥", cell_style),
             Paragraph(f"{it.get('item_rub')} ₽", cell_right_bold)
         ])
@@ -483,7 +627,7 @@ def generate_order_receipt_pdf(order: Order, user: User) -> bytes:
     if order.customs_duty_rub > 0:
         summary_rows.append([Paragraph("Таможенная пошлина (>200€):", cell_style), Paragraph(f"{order.customs_duty_rub} ₽", cell_right_bold)])
     if order.applied_promo:
-        clean_promo = str(order.applied_promo).strip()
+        clean_promo = html.escape(str(order.applied_promo).strip(), quote=False)
         summary_rows.append([Paragraph("Промокод на скидку:", cell_style), Paragraph(f"<b>{clean_promo}</b>", cell_nowrap)])
 
     summary_rows.append([Paragraph("<b>ИТОГО К ОПЛАТЕ:</b>", cell_bold), Paragraph(f"<b>{order.total_rub} ₽</b>", cell_right_bold)])
@@ -527,6 +671,15 @@ def process_order_paid(order: Order, db: Session):
     db.commit()
 
     user = db.query(User).filter(User.id == order.user_id).first()
+    if user:
+        settings = db.query(SystemSettings).first()
+        if settings:
+            paid_count = db.query(Order).filter(
+                Order.telegram_id == user.telegram_id,
+                Order.status.in_(["Оплачен", "Выкуплен", "Выдан"]),
+            ).count()
+            user.client_status = "Постоянный" if paid_count >= settings.regular_threshold else "Новый"
+            db.commit()
     try:
         pdf_bytes = generate_order_receipt_pdf(order, user)
         filename = f"Receipt_PPU_Order_{order.id}.pdf"
@@ -584,6 +737,14 @@ async def telegram_webhook(request: Request, db: Session = Depends(get_db)):
             order = db.query(Order).filter(Order.id == order_id).first()
             if order:
                 order.status = "Отменен"
+                user = db.query(User).filter(User.id == order.user_id).first() if order.user_id else None
+                settings = db.query(SystemSettings).first()
+                if user and settings:
+                    paid_count = db.query(Order).filter(
+                        Order.telegram_id == user.telegram_id,
+                        Order.status.in_(["Оплачен", "Выкуплен", "Выдан"]),
+                    ).count()
+                    user.client_status = "Постоянный" if paid_count >= settings.regular_threshold else "Новый"
                 db.commit()
                 send_telegram_message(order.telegram_id, f"❌ Заказ #{order.id} отклонён менеджером.")
                 send_telegram_message(ADMIN_CHAT_ID, f"🚫 Заказ #{order.id} отклонён.")
@@ -705,10 +866,11 @@ async def web_app_home(request: Request, db: Session = Depends(get_db)):
 
 @app.post("/api/user/sync")
 async def sync_user(
-    telegram_id: int = Form(...),
-    username: str = Form(""),
+    telegram_user: dict = Depends(require_telegram_user),
     db: Session = Depends(get_db)
 ):
+    telegram_id = int(telegram_user["id"])
+    username = str(telegram_user.get("username") or "")[:64]
     user = db.query(User).filter(User.telegram_id == telegram_id).first()
     if not user:
         user = User(telegram_id=telegram_id, username=username.replace("@", ""))
@@ -786,10 +948,13 @@ async def sync_user(
 
 @app.post("/api/user/cart-sync")
 async def sync_cart_state(
-    telegram_id: int = Form(...),
+    telegram_user: dict = Depends(require_telegram_user),
     cart_json: str = Form("[]"),
     db: Session = Depends(get_db)
 ):
+    telegram_id = int(telegram_user["id"])
+    if len(cart_json) > 100_000:
+        raise HTTPException(status_code=413, detail="Корзина слишком большая")
     user = db.query(User).filter(User.telegram_id == telegram_id).first()
     if user:
         user.abandoned_cart_json = cart_json
@@ -804,6 +969,8 @@ async def get_showcase_reviews(db: Session = Depends(get_db)):
     data = []
     for r in revs:
         p_url = (r.photo_url or "").strip()
+        if not re.fullmatch(r"/static/uploads/[A-Za-z0-9._-]+", p_url):
+            p_url = ""
         text_content = (r.review_text or "").strip()
         if not text_content:
             text_content = "Все круто!"
@@ -822,9 +989,10 @@ async def get_showcase_reviews(db: Session = Depends(get_db)):
 
 @app.post("/api/user/save-profile")
 async def save_user_profile(
-    telegram_id: int = Form(...), default_shoe_size: str = Form(""), default_cloth_size: str = Form(""),
-    height_cm: str = Form(""), weight_kg: str = Form(""), cdek_pvz: str = Form(""), db: Session = Depends(get_db)
+    telegram_user: dict = Depends(require_telegram_user), default_shoe_size: str = Form("", max_length=32), default_cloth_size: str = Form("", max_length=32),
+    height_cm: str = Form("", max_length=3), weight_kg: str = Form("", max_length=3), cdek_pvz: str = Form("", max_length=128), db: Session = Depends(get_db)
 ):
+    telegram_id = int(telegram_user["id"])
     user = db.query(User).filter(User.telegram_id == telegram_id).first()
     if user:
         user.default_shoe_size = default_shoe_size.strip()
@@ -846,9 +1014,10 @@ async def check_promo(code: str = Form(...), db: Session = Depends(get_db)):
 
 @app.post("/api/order/submit")
 async def submit_order_cart(
-    telegram_id: int = Form(...), cart_json: str = Form(...), promo_code: str = Form(""),
-    cdek_pvz: str = Form(""), has_insurance: str = Form("false"), db: Session = Depends(get_db)
+    telegram_user: dict = Depends(require_telegram_user), cart_json: str = Form(..., max_length=100_000), promo_code: str = Form("", max_length=64),
+    cdek_pvz: str = Form("", max_length=128), has_insurance: str = Form("false"), db: Session = Depends(get_db)
 ):
+    telegram_id = int(telegram_user["id"])
     now = datetime.datetime.utcnow().timestamp()
     if telegram_id in LAST_ORDER_SUBMITS:
         if now - LAST_ORDER_SUBMITS[telegram_id] < 4.0:
@@ -864,11 +1033,57 @@ async def submit_order_cart(
         items = json.loads(cart_json)
     except Exception:
         raise HTTPException(status_code=400, detail="Неверный формат корзины")
-    if not items:
+    if not isinstance(items, list) or not items:
         raise HTTPException(status_code=400, detail="Корзина пуста")
 
-    for it in items:
-        it["url"] = clean_dewu_url(it.get("url", ""))
+    if len(items) > 30:
+        raise HTTPException(status_code=400, detail="В одном заказе может быть не больше 30 товаров")
+
+    rate = round(settings.cny_rate + settings.buffer_rate, 2)
+    eur_rate = get_cbr_eur_rate()
+    if not math.isfinite(rate) or rate <= 0 or not math.isfinite(eur_rate) or eur_rate <= 0:
+        raise HTTPException(status_code=503, detail="Курс валют не настроен")
+    recalc_items = []
+    for raw_item in items:
+        if not isinstance(raw_item, dict):
+            raise HTTPException(status_code=400, detail="Некорректный товар в корзине")
+        category = raw_item.get("category")
+        if category not in ("Обувь", "Одежда"):
+            raise HTTPException(status_code=400, detail="Недопустимая категория товара")
+        try:
+            price_cny = float(raw_item.get("price_cny"))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Некорректная цена товара")
+        if not math.isfinite(price_cny) or not 0 < price_cny <= 1_000_000:
+            raise HTTPException(status_code=400, detail="Цена товара вне допустимого диапазона")
+        size = str(raw_item.get("size") or "").strip()[:32]
+        if not size:
+            raise HTTPException(status_code=400, detail="Укажите размер каждого товара")
+        url = clean_dewu_url(str(raw_item.get("url") or ""))[:2048]
+        parsed_url = urlsplit(url)
+        if parsed_url.scheme not in ("http", "https") or not parsed_url.hostname:
+            raise HTTPException(status_code=400, detail="Ссылка на товар должна быть http или https")
+
+        base_rub = price_cny * rate
+        if user.pass_slots > 0:
+            fee = 0
+        elif category == "Обувь" and user.client_status == "Новый":
+            fee = max(settings.fee_new_shoes_min, base_rub * settings.fee_new_shoes_percent / 100)
+        elif category == "Обувь":
+            fee = max(settings.fee_regular_shoes_min, base_rub * settings.fee_regular_shoes_percent / 100)
+        elif user.client_status == "Новый":
+            fee = max(settings.fee_new_clothes_min, base_rub * settings.fee_new_clothes_percent / 100)
+        else:
+            fee = max(settings.fee_regular_clothes_min, base_rub * settings.fee_regular_clothes_percent / 100)
+        rounded_fee = math.floor(fee + 0.5)
+        item_rub = math.floor(base_rub + rounded_fee + 0.5)
+        euro_value = base_rub / eur_rate
+        duty = math.floor(((euro_value - 200) * 0.15 * eur_rate + 689) * 1.05 + 0.5) if euro_value > 200 else 0
+        recalc_items.append({
+            "category": category, "url": url, "size": size, "price_cny": price_cny,
+            "fee": rounded_fee, "item_rub": item_rub, "duty": duty,
+        })
+    items = recalc_items
 
     insurance_enabled = (has_insurance.lower() == "true")
     total_cny = sum(i["price_cny"] for i in items)
@@ -909,8 +1124,6 @@ async def submit_order_cart(
     )
     db.add(new_order)
     user.orders_count += 1
-    if user.client_status == "Новый" and user.orders_count >= settings.regular_threshold:
-        user.client_status = "Постоянный"
 
     user.abandoned_cart_json = "[]"
     user.abandoned_cart_updated_at = None
@@ -920,16 +1133,16 @@ async def submit_order_cart(
     db.refresh(new_order)
 
     items_text = "".join([
-        f"{idx+1}. <b>{it.get('category')}</b> | Разм: {it.get('size')} | {it.get('price_cny')} ¥ (≈ {it.get('item_rub')} ₽)\nURL: {it.get('url')}\n"
+        f"{idx+1}. <b>{html.escape(str(it.get('category')), quote=False)}</b> | Разм: {html.escape(str(it.get('size')), quote=False)} | {it.get('price_cny')} ¥ (≈ {it.get('item_rub')} ₽)\nURL: {html.escape(str(it.get('url')), quote=False)}\n"
         for idx, it in enumerate(items)
     ])
     
     admin_msg = (
         f"🔥 <b>Новый заказ #{new_order.id}!</b>\n"
-        f"Клиент: @{user.username} (TG: <code>{user.telegram_id}</code>)\n"
-        f"Телефон: <b>{user.phone or 'Не указан'}</b>\n"
-        f"Статус: <b>{user.client_status}</b>\n"
-        f"ПВЗ СДЭК: <b>{pvz_final}</b>\n"
+        f"Клиент: @{html.escape(str(user.username or ''), quote=False)} (TG: <code>{user.telegram_id}</code>)\n"
+        f"Телефон: <b>{html.escape(str(user.phone or 'Не указан'), quote=False)}</b>\n"
+        f"Статус: <b>{html.escape(str(user.client_status), quote=False)}</b>\n"
+        f"ПВЗ СДЭК: <b>{html.escape(str(pvz_final), quote=False)}</b>\n"
         f"Рост/Вес: {user.height_cm or '—'} см / {user.weight_kg or '—'} кг\n"
         f"🛡 Страховка (+2.5%): <b>{'Подключена (' + str(insurance_fee) + ' ₽)' if insurance_enabled else 'Отключена'}</b>\n\n"
         f"📦 <b>Товары:</b>\n{items_text}\n"
@@ -939,7 +1152,7 @@ async def submit_order_cart(
     if total_duty > 0:
         admin_msg += f"🚨 <b>Таможенная пошлина (>200€): ~{total_duty} ₽</b>\n"
     if applied_promo:
-        admin_msg += f"🎟 Применено: <code>{applied_promo}</code> (-{discount} ₽)\n"
+        admin_msg += f"🎟 Применено: <code>{html.escape(str(applied_promo), quote=False)}</code> (-{discount} ₽)\n"
 
     adm_keyboard = {
         "inline_keyboard": [[
@@ -953,24 +1166,25 @@ async def submit_order_cart(
 
 @app.post("/api/order/photo-order")
 async def photo_order(
-    telegram_id: int = Form(...),
-    comment: str = Form(""),
+    telegram_user: dict = Depends(require_telegram_user),
+    comment: str = Form("", max_length=2000),
     photo: UploadFile = File(...),
     db: Session = Depends(get_db)
 ):
+    telegram_id = int(telegram_user["id"])
     user = db.query(User).filter(User.telegram_id == telegram_id).first()
     if not user:
         raise HTTPException(status_code=400, detail="Пользователь не найден")
 
-    contents = await photo.read()
+    contents = await read_image_upload(photo)
     caption = (
         f"📸 <b>НОВЫЙ ЗАКАЗ ПО ФОТО!</b>\n\n"
-        f"Клиент: @{user.username} (TG: <code>{user.telegram_id}</code>)\n"
-        f"Телефон: <b>{user.phone or 'Не указан'}</b>\n"
-        f"ПВЗ СДЭК: <b>{user.cdek_pvz or 'Не указан'}</b>\n"
+        f"Клиент: @{html.escape(str(user.username or ''), quote=False)} (TG: <code>{user.telegram_id}</code>)\n"
+        f"Телефон: <b>{html.escape(str(user.phone or 'Не указан'), quote=False)}</b>\n"
+        f"ПВЗ СДЭК: <b>{html.escape(str(user.cdek_pvz or 'Не указан'), quote=False)}</b>\n"
         f"Параметры: {user.height_cm or '—'} см / {user.weight_kg or '—'} кг\n"
         f"Размеры: Обувь {user.default_shoe_size or '—'} | Одежда {user.default_cloth_size or '—'}\n\n"
-        f"📝 <b>Комментарий:</b>\n{comment.strip() or 'Без комментария'}"
+        f"📝 <b>Комментарий:</b>\n{html.escape(comment.strip() or 'Без комментария', quote=False)}"
     )
     send_telegram_photo(ADMIN_CHAT_ID, contents, caption)
     return JSONResponse({"status": "ok"})
@@ -986,10 +1200,16 @@ async def admin_login_page(request: Request):
 
 @app.post("/admin/auth/login")
 async def admin_login_post(
+    request: Request,
     username: str = Form(...),
     password: str = Form(...),
     remember: str = Form("false")
 ):
+    host = request.client.host if request.client else "unknown"
+    now = time.monotonic()
+    recent = [stamp for stamp in ADMIN_LOGIN_ATTEMPTS.get(host, []) if now - stamp < 300]
+    if len(recent) >= 10:
+        raise HTTPException(status_code=429, detail="Слишком много попыток входа. Попробуйте позже.")
     role = None
     if ADMIN_PASS and username == ADMIN_LOGIN and password == ADMIN_PASS:
         role = "admin"
@@ -997,7 +1217,10 @@ async def admin_login_post(
         role = "demo"
 
     if not role:
+        recent.append(now)
+        ADMIN_LOGIN_ATTEMPTS[host] = recent
         return JSONResponse({"status": "error", "message": "Неверный логин или пароль"}, status_code=400)
+    ADMIN_LOGIN_ATTEMPTS.pop(host, None)
 
     token = secrets.token_hex(32)
     is_remember = (remember.lower() == "true")
@@ -1010,7 +1233,7 @@ async def admin_login_post(
     response = JSONResponse({"status": "ok", "role": role})
     response.set_cookie(
         key="session_token", value=token, max_age=max_age, expires=max_age,
-        httponly=True, samesite="lax", secure=False
+        httponly=True, samesite="lax", secure=request.url.scheme == "https"
     )
     return response
 
@@ -1037,9 +1260,9 @@ def get_demo_dashboard_data():
         custom_delivery_days=14
     )
     demo_orders = [
-        {"id": 901, "created_at": "18.10 14:20", "username": "demo_user_1", "phone": "", "cdek_pvz": "DEMO", "items_html": "• <b>Обувь</b> (42 EU): <a href='#' style='color: #00E5C9;'>Dewu Link</a>", "total_rub": 14200, "customs_duty_rub": 0, "status": "Выдан", "delivery_rub": 1850, "cdek_track": "DEMO-TRACK-001", "rating": 5, "review_text": "Отличная пара, доставка за 12 дней до Москвы!"},
-        {"id": 902, "created_at": "17.10 18:45", "username": "demo_user_2", "phone": "", "cdek_pvz": "DEMO", "items_html": "• <b>Одежда</b> (L): <a href='#' style='color: #00E5C9;'>Dewu Link</a>", "total_rub": 8900, "customs_duty_rub": 0, "status": "СДЭК", "delivery_rub": 1200, "cdek_track": "DEMO-TRACK-002", "rating": 5, "review_text": "Худи приехало с бирками и сертификатом."},
-        {"id": 903, "created_at": "17.10 11:10", "username": "demo_user_3", "phone": "", "cdek_pvz": "DEMO", "items_html": "• <b>Обувь</b> (37.5 EU): <a href='#' style='color: #00E5C9;'>Dewu Link</a>", "total_rub": 22400, "customs_duty_rub": 850, "status": "На таможне в России", "delivery_rub": 2100, "cdek_track": "", "rating": 0, "review_text": ""}
+        {"id": 901, "created_at": "18.10 14:20", "username": "demo_user_1", "phone": "", "cdek_pvz": "DEMO", "items": [{"category": "Обувь", "size": "42 EU", "url": ""}], "total_rub": 14200, "customs_duty_rub": 0, "status": "Выдан", "delivery_rub": 1850, "cdek_track": "DEMO-TRACK-001", "rating": 5, "review_text": "Отличная пара, доставка за 12 дней до Москвы!"},
+        {"id": 902, "created_at": "17.10 18:45", "username": "demo_user_2", "phone": "", "cdek_pvz": "DEMO", "items": [{"category": "Одежда", "size": "L", "url": ""}], "total_rub": 8900, "customs_duty_rub": 0, "status": "СДЭК", "delivery_rub": 1200, "cdek_track": "DEMO-TRACK-002", "rating": 5, "review_text": "Худи приехало с бирками и сертификатом."},
+        {"id": 903, "created_at": "17.10 11:10", "username": "demo_user_3", "phone": "", "cdek_pvz": "DEMO", "items": [{"category": "Обувь", "size": "37.5 EU", "url": ""}], "total_rub": 22400, "customs_duty_rub": 850, "status": "На таможне в России", "delivery_rub": 2100, "cdek_track": "", "rating": 0, "review_text": ""}
     ]
     demo_users = [
         User(id=1, telegram_id=0, username="demo_user_1", phone="", client_status="Постоянный", orders_count=4, total_spent=52300, pass_tier="Silver", pass_slots=3, cdek_pvz="DEMO"),
@@ -1161,14 +1384,20 @@ async def admin_dashboard(request: Request, db: Session = Depends(get_db)):
         except Exception:
             itms = []
 
-        rendered_items = "<br>".join([
-            f"• <b>{it.get('category', 'Товар')}</b> ({it.get('size', '—')}): <a href='{it.get('url', '#')}' target='_blank' style='color: #00E5C9;'>Dewu Link</a>"
-            for it in itms
-        ]) if itms else "—"
+        rendered_items = []
+        for item in itms:
+            raw_url = str(item.get("url", ""))[:2048]
+            parsed_url = urlsplit(raw_url)
+            safe_url = raw_url if parsed_url.scheme in ("http", "https") and parsed_url.hostname else ""
+            rendered_items.append({
+                "category": str(item.get("category", "Товар"))[:64],
+                "size": str(item.get("size", "—"))[:32],
+                "url": safe_url,
+            })
 
         orders_data.append({
             "id": o.id, "created_at": format_dt(o.created_at), "username": o.username or "—", "phone": o.phone or "—",
-            "cdek_pvz": o.cdek_pvz or "—", "items_html": rendered_items, "total_rub": o.total_rub or 0,
+            "cdek_pvz": o.cdek_pvz or "—", "items": rendered_items, "total_rub": o.total_rub or 0,
             "customs_duty_rub": o.customs_duty_rub or 0, "status": o.status or "Новый",
             "delivery_rub": o.delivery_rub or 0, "cdek_track": o.cdek_track or "",
             "rating": o.rating or 0, "review_text": o.review_text or ""
@@ -1219,10 +1448,10 @@ async def admin_dashboard(request: Request, db: Session = Depends(get_db)):
 # --- УПРАВЛЕНИЕ ОТЗЫВАМИ В АДМИНКЕ ---
 @app.post("/admin/reviews/create")
 async def create_showcase_review(
-    username: str = Form(...),
-    orders_count: int = Form(1),
-    rating: int = Form(5),
-    review_text: str = Form(...),
+    username: str = Form(..., max_length=80),
+    orders_count: int = Form(1, ge=1, le=10000),
+    rating: int = Form(5, ge=1, le=5),
+    review_text: str = Form(..., max_length=2000),
     custom_date: str = Form(""),
     photo: UploadFile = File(None),
     auth_role: str = Depends(get_current_admin_role),
@@ -1233,10 +1462,11 @@ async def create_showcase_review(
 
     photo_url = ""
     if photo and photo.filename:
-        filename = f"rev_{secrets.token_hex(8)}_{photo.filename}"
+        contents = await read_image_upload(photo)
+        filename = f"rev_{secrets.token_hex(8)}.jpg"
         dest_path = os.path.join(UPLOAD_DIR, filename)
         with open(dest_path, "wb") as buffer:
-            shutil.copyfileobj(photo.file, buffer)
+            buffer.write(contents)
         photo_url = f"/static/uploads/{filename}"
 
     created_dt = datetime.datetime.utcnow()
@@ -1316,11 +1546,25 @@ async def download_backup(auth_role: str = Depends(get_current_admin_role)):
 async def restore_backup(backup_file: UploadFile = File(...), auth_role: str = Depends(get_current_admin_role)):
     if auth_role == "demo":
         raise HTTPException(status_code=403, detail="Функция недоступна в демо-режиме")
-    if not backup_file.filename.endswith(".db"):
-        raise HTTPException(status_code=400, detail="Загрузите файл с расширением .db")
-    contents = await backup_file.read()
-    with open("database.db", "wb") as f:
-        f.write(contents)
+    contents = await backup_file.read(100 * 1024 * 1024 + 1)
+    if len(contents) > 100 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Размер базы не должен превышать 100 МБ")
+    if not contents.startswith(b"SQLite format 3\x00"):
+        raise HTTPException(status_code=400, detail="Файл не является базой SQLite")
+    temp_path = "database.db.restore-tmp"
+    try:
+        with open(temp_path, "wb") as f:
+            f.write(contents)
+        with closing(sqlite3.connect(temp_path)) as candidate:
+            check = candidate.execute("PRAGMA quick_check").fetchone()[0]
+        if check != "ok":
+            raise HTTPException(status_code=400, detail="База данных повреждена")
+        auto_backup_database()
+        os.replace(temp_path, "database.db")
+        engine.dispose()
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
     return JSONResponse({"status": "ok", "message": "База данных успешно восстановлена"})
 
 # --- РАССЫЛКА ---
@@ -1389,6 +1633,16 @@ async def admin_update_order_status(
         return JSONResponse({"status": "ok"})
 
     order.status = status
+    if order.user_id:
+        db.flush()
+        user = db.query(User).filter(User.id == order.user_id).first()
+        settings = db.query(SystemSettings).first()
+        if user and settings:
+            paid_count = db.query(Order).filter(
+                Order.telegram_id == user.telegram_id,
+                Order.status.in_(["Оплачен", "Выкуплен", "Выдан"]),
+            ).count()
+            user.client_status = "Постоянный" if paid_count >= settings.regular_threshold else "Новый"
     
     if status == "Выдан" and old_status != "Выдан":
         order.delivered_at = datetime.datetime.utcnow()
@@ -1482,6 +1736,22 @@ async def admin_save_settings(
     if auth_role == "demo":
         return JSONResponse({"status": "ok", "message": "В демо-режиме настройки изолированы"})
 
+    numeric_values = [
+        cny_rate, buffer_rate, fee_new_shoes_percent, fee_new_shoes_min,
+        fee_new_clothes_percent, fee_new_clothes_min, fee_regular_shoes_percent,
+        fee_regular_shoes_min, fee_regular_clothes_percent, fee_regular_clothes_min,
+        pass_price_bronze, pass_price_silver, pass_price_gold, pass_price_platinum,
+        welcome_bonus_rub,
+    ]
+    if any(not math.isfinite(value) for value in numeric_values):
+        raise HTTPException(status_code=422, detail="Все суммы и проценты должны быть конечными числами")
+    if not 0.01 <= cny_rate <= 100 or not 0 <= buffer_rate <= 10 or not 1 <= regular_threshold <= 100:
+        raise HTTPException(status_code=422, detail="Проверьте курс, буфер и порог тарифа")
+    if any(not 0 <= value <= 100 for value in (fee_new_shoes_percent, fee_new_clothes_percent, fee_regular_shoes_percent, fee_regular_clothes_percent)):
+        raise HTTPException(status_code=422, detail="Процент комиссии должен быть от 0 до 100")
+    if any(not 0 <= value <= 1_000_000 for value in (fee_new_shoes_min, fee_new_clothes_min, fee_regular_shoes_min, fee_regular_clothes_min)):
+        raise HTTPException(status_code=422, detail="Минимальная комиссия вне допустимого диапазона")
+
     s = db.query(SystemSettings).first()
     if s:
         s.cny_rate, s.buffer_rate, s.regular_threshold = cny_rate, buffer_rate, regular_threshold
@@ -1495,7 +1765,33 @@ async def admin_save_settings(
         s.welcome_bonus_rub, s.welcome_bonus_hours = welcome_bonus_rub, welcome_bonus_hours
         s.custom_delivery_days = custom_delivery_days
         db.commit()
-    return JSONResponse({"status": "ok"})
+    if PICKUP_SETTINGS_URL:
+        if not BOT_SETTINGS_TOKEN:
+            return JSONResponse({"status": "error", "message": "Настройки сохранены здесь, но синхронизация Mini App не настроена: отсутствует BOT_SETTINGS_TOKEN"}, status_code=503)
+        sync_payload = {
+            "pronto_rate": cny_rate,
+            "buffer_rub": buffer_rate,
+            "shoes_new_percent": fee_new_shoes_percent,
+            "shoes_new_min_rub": fee_new_shoes_min,
+            "shoes_regular_percent": fee_regular_shoes_percent,
+            "shoes_regular_min_rub": fee_regular_shoes_min,
+            "clothes_new_percent": fee_new_clothes_percent,
+            "clothes_new_min_rub": fee_new_clothes_min,
+            "clothes_regular_percent": fee_regular_clothes_percent,
+            "clothes_regular_min_rub": fee_regular_clothes_min,
+            "regular_after_paid_orders": regular_threshold,
+        }
+        try:
+            response = requests.put(
+                PICKUP_SETTINGS_URL,
+                json=sync_payload,
+                headers={"X-Bot-Settings-Token": BOT_SETTINGS_TOKEN},
+                timeout=5,
+            )
+            response.raise_for_status()
+        except requests.RequestException:
+            return JSONResponse({"status": "error", "message": "Настройки сохранены в менеджерской панели, но не удалось передать их в активную Mini App"}, status_code=502)
+    return JSONResponse({"status": "ok", "synced": bool(PICKUP_SETTINGS_URL)})
 
 @app.post("/admin/promo/create")
 async def create_promo(

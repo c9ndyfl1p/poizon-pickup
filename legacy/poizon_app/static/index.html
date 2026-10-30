@@ -737,6 +737,7 @@
 
   <script>
     const tg = window.Telegram?.WebApp;
+    const telegramAuthHeaders = () => ({'X-Telegram-Init-Data': tg?.initData || ''});
     if (tg) {
       tg.expand();
       if (tg.colorScheme === 'light') document.body.classList.add('light-theme');
@@ -745,6 +746,7 @@
     let ud = null, cat = 'Обувь', cart = [], editIdx = -1, trMode = 'active', promoObj = null, selP = 'Bronze';
     let selectedPhotoFile = null;
     let isSubmitting = false;
+    const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
 
     // Восстановление корзины из LocalStorage
     try {
@@ -765,9 +767,8 @@
         localStorage.setItem('ppu_cart_draft_time', Date.now().toString());
         if (ud?.telegram_id) {
           const fd = new FormData();
-          fd.append('telegram_id', ud.telegram_id);
           fd.append('cart_json', JSON.stringify(cart));
-          fetch('/api/user/cart-sync', { method: 'POST', body: fd });
+          fetch('/api/user/cart-sync', { method: 'POST', body: fd, headers: telegramAuthHeaders() });
         }
       } catch(e) {}
     }
@@ -883,29 +884,28 @@
         }
 
         container.innerHTML = list.map(item => {
-          const text = item.review_text ? item.review_text : 'Отличный заказ!';
-          const photoHtml = (item.photo_url && item.photo_url.trim() !== '') 
-            ? `<img src="${item.photo_url}" class="review-photo-thumb" onclick="openPhotoModal('${item.photo_url}')" onerror="this.style.display='none'">` 
-            : '';
-
+          const text = item.review_text || 'Отличный заказ!';
+          const photoUrl = /^\/static\/uploads\/[A-Za-z0-9._-]+$/.test(item.photo_url || '') ? item.photo_url : '';
+          const username = String(item.username || 'Клиент');
+          const ordersCount = Math.max(1, Math.min(10000, Number(item.orders_count) || 1));
+          const rating = Math.max(1, Math.min(5, Number(item.rating) || 5));
+          const photoHtml = photoUrl ? `<img src="${escapeHTML(photoUrl)}" class="review-photo-thumb" data-photo-url="${escapeHTML(photoUrl)}" onerror="this.style.display='none'">` : '';
           return `
             <div class="review-showcase-card">
               <div class="review-header">
                 <div class="review-user-info">
-                  <div class="review-avatar">${(item.username || 'U').charAt(0).toUpperCase()}</div>
+                  <div class="review-avatar">${escapeHTML(username.charAt(0).toUpperCase())}</div>
                   <div>
-                    <b style="font-size: 14px; color: var(--text);">${item.username || 'Клиент'}</b>
-                    <div style="font-size: 11px; color: var(--accent); font-weight: 600;">${item.orders_count || 1} выкупленных заказов</div>
+                    <b style="font-size: 14px; color: var(--text);">${escapeHTML(username)}</b>
+                    <div style="font-size: 11px; color: var(--accent); font-weight: 600;">${ordersCount} выкупленных заказов</div>
                   </div>
                 </div>
-                <div class="review-stars">${'★'.repeat(item.rating || 5)}${'☆'.repeat(5 - (item.rating || 5))}</div>
+                <div class="review-stars">${'★'.repeat(rating)}${'☆'.repeat(5 - rating)}</div>
               </div>
-              <p style="font-size: 13px; line-height: 1.4; color: var(--text); margin-top: 8px; word-break: break-word;">
-                ${text}
-              </p>
+              <p style="font-size: 13px; line-height: 1.4; color: var(--text); margin-top: 8px; word-break: break-word;">${escapeHTML(text)}</p>
               ${photoHtml}
               <div class="review-footer">
-                <span>${item.date || 'Недавно'}</span>
+                <span>${escapeHTML(item.date || 'Недавно')}</span>
                 <div class="manager-like-badge" title="Одобрено менеджером PoizonPickUP">
                   <img src="/static/logo.jpg" class="manager-avatar-circle" onerror="this.src='https://via.placeholder.com/22/000000/00E5C9?text=PPU'">
                   <span class="manager-heart-icon">❤️</span>
@@ -914,6 +914,8 @@
             </div>
           `;
         }).join('');
+
+        container.querySelectorAll('.review-photo-thumb').forEach(img => img.addEventListener('click', () => openPhotoModal(img.dataset.photoUrl)));
 
         container.querySelectorAll('.review-showcase-card').forEach(card => {
           card.addEventListener('mousemove', e => {
@@ -929,10 +931,8 @@
     }
 
     async function load() {
-      const b = new FormData();
-      b.append('telegram_id', tg?.initDataUnsafe?.user?.id || 0);
-      b.append('username', tg?.initDataUnsafe?.user?.username || "local_preview");
-      const r = await fetch('/api/user/sync', {method: 'POST', body: b});
+      const r = await fetch('/api/user/sync', {method: 'POST', headers: telegramAuthHeaders()});
+      if (!r.ok) { document.body.innerHTML = '<main style="padding:32px;color:white;font:16px sans-serif">Откройте приложение через Telegram.</main>'; return; }
       ud = await r.json();
       
       document.getElementById('display-rate').innerText = ud.calc_rate;
@@ -1002,7 +1002,6 @@
       let r = ud.fee_rules;
       if(r.is_regular) f = cat==='Обувь'? Math.max(r.reg_shoes_min, b*r.reg_shoes_p/100) : Math.max(r.reg_clothes_min, b*r.reg_clothes_p/100);
       else f = cat==='Обувь'? Math.max(r.new_shoes_min, b*r.new_shoes_p/100) : Math.max(r.new_clothes_min, b*r.new_clothes_p/100);
-      if(ud.welcome_bonus?.active) f = Math.max(0, f - ud.welcome_bonus.rub);
       return {f: Math.round(f), d: calcD(p)};
     }
     
@@ -1022,6 +1021,7 @@
       let baseSum = Math.round(p * ud.calc_rate + res.f);
       let isInsured = document.getElementById('chk-insurance').checked;
       let finalSum = isInsured ? Math.round(baseSum * 1.025) : baseSum;
+      if (ud.welcome_bonus?.active) finalSum -= Math.min(res.f, Number(ud.welcome_bonus.rub) || 0);
 
       document.getElementById('live-calc-fee').innerText = `Комиссия байера: ${res.f} ₽`;
       document.getElementById('live-calc-total').innerText = finalSum.toLocaleString('ru-RU') + ' ₽';
@@ -1087,14 +1087,13 @@
 
       let pvz = ud?.cdek_pvz || "Не указан";
       let b = new FormData(); 
-      b.append('telegram_id', ud.telegram_id); 
       b.append('cart_json', JSON.stringify(itemsList)); 
       b.append('cdek_pvz', pvz);
       b.append('has_insurance', isInsured ? 'true' : 'false');
       if (promoObj) b.append('promo_code', promoObj.code);
       
       try {
-        let r = await fetch('/api/order/submit', { method: 'POST', body: b });
+        let r = await fetch('/api/order/submit', { method: 'POST', body: b, headers: telegramAuthHeaders() });
         let res = await r.json();
 
         if (r.ok && res.status === 'ok') {
@@ -1148,12 +1147,11 @@
       btn.innerText = 'Отправка...';
 
       let b = new FormData();
-      b.append('telegram_id', ud.telegram_id);
       b.append('comment', comment);
       b.append('photo', selectedPhotoFile);
 
       try {
-        let r = await fetch('/api/order/photo-order', {method: 'POST', body: b});
+        let r = await fetch('/api/order/photo-order', {method: 'POST', body: b, headers: telegramAuthHeaders()});
         if (r.ok) {
           alert('Фото отправлено менеджеру!');
           selectedPhotoFile = null;
@@ -1199,20 +1197,21 @@
       w.style.display='block'; document.getElementById('cart-count').innerText = cart.length;
       let tot = 0, tf = 0, td = 0;
       c.innerHTML = cart.map((i,x) => {
-        tot+=i.item_rub; tf+=i.fee; td+=i.duty;
+        const itemRub = Number(i.item_rub) || 0, feeRub = Number(i.fee) || 0, dutyRub = Number(i.duty) || 0;
+        tot += itemRub; tf += feeRub; td += dutyRub;
         return `
           <div class="cart-card">
             <div>
-              <div class="cart-info-main">${i.category} · ${i.size}</div>
-              <div class="cart-info-meta">${i.price_cny} ¥</div>
-              <div class="cart-info-fee">Комиссия: ${i.fee} ₽</div>
-              ${i.duty>0 ? `<div class="duty-tag">+ пошлина ~${i.duty} ₽</div>` : ''}
+              <div class="cart-info-main">${escapeHTML(i.category)} · ${escapeHTML(i.size)}</div>
+              <div class="cart-info-meta">${escapeHTML(i.price_cny)} ¥</div>
+              <div class="cart-info-fee">Комиссия: ${escapeHTML(i.fee)} ₽</div>
+              ${dutyRub > 0 ? `<div class="duty-tag">+ пошлина ~${dutyRub} ₽</div>` : ''}
               <div class="cart-actions">
                 <button class="btn-pill" onclick="editCart(${x})">Изменить</button>
                 <button class="btn-pill btn-pill-del" onclick="cart.splice(${x},1);updCart()">Удалить</button>
               </div>
             </div>
-            <b style="font-size: 16px; font-weight: 700;">${i.item_rub.toLocaleString('ru-RU')} ₽</b>
+            <b style="font-size: 16px; font-weight: 700;">${itemRub.toLocaleString('ru-RU')} ₽</b>
           </div>
         `;
       }).join('');
@@ -1220,7 +1219,9 @@
       let isInsured = document.getElementById('chk-insurance').checked;
       let insFee = isInsured ? Math.round(tot * 0.025) : 0;
       tot += insFee;
-      if(promoObj) tot -= Math.min(tf, promoObj.discount_rub);
+      const welcomeDiscount = ud?.welcome_bonus?.active ? Math.min(tf, Number(ud.welcome_bonus.rub) || 0) : 0;
+      tot -= welcomeDiscount;
+      if(promoObj) tot -= Math.min(Math.max(0, tf - welcomeDiscount), Number(promoObj.discount_rub) || 0);
       document.getElementById('cart-total').innerText = tot.toLocaleString('ru-RU') + ' ₽';
       
       let insEl = document.getElementById('cart-insurance-fee');
@@ -1291,11 +1292,11 @@
           <div class="glass-card order-card-collapsible" onclick="toggleOrderTimeline(${o.id})">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
               <b>Заказ #${o.id}</b>
-              <span style="font-size:12px;color:var(--accent);font-weight:700;">${o.status}</span>
+              <span style="font-size:12px;color:var(--accent);font-weight:700;">${escapeHTML(o.status)}</span>
             </div>
-            <div style="font-size:13px;color:var(--muted)">Сумма: <b style="color:var(--text);">${o.total_rub.toLocaleString('ru-RU')} ₽</b></div>
-            ${o.delivery_rub>0 ? `<div style="font-size:12px;color:var(--accent);margin-top:4px;">Доставка: <b>${o.delivery_rub} ₽</b></div>` : ''}
-            ${o.cdek_track ? `<div style="font-size:12px;margin-top:4px;">СДЭК: <a href="https://www.cdek.ru/ru/tracking?order_id=${o.cdek_track}" target="_blank" style="color:var(--accent);" onclick="event.stopPropagation()">${o.cdek_track}</a></div>` : ''}
+            <div style="font-size:13px;color:var(--muted)">Сумма: <b style="color:var(--text);">${(Number(o.total_rub) || 0).toLocaleString('ru-RU')} ₽</b></div>
+            ${o.delivery_rub>0 ? `<div style="font-size:12px;color:var(--accent);margin-top:4px;">Доставка: <b>${escapeHTML(o.delivery_rub)} ₽</b></div>` : ''}
+            ${o.cdek_track ? `<div style="font-size:12px;margin-top:4px;">СДЭК: <a href="https://www.cdek.ru/ru/tracking?order_id=${encodeURIComponent(String(o.cdek_track))}" target="_blank" rel="noopener" style="color:var(--accent);" onclick="event.stopPropagation()">${escapeHTML(o.cdek_track)}</a></div>` : ''}
             <div style="font-size:11px;color:var(--subtle);margin-top:8px;text-align:right;" id="arrow-order-${o.id}">Нажмите для подробного трекинга ▾</div>
             <div class="timeline-wrap" id="timeline-order-${o.id}">
               <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--muted);letter-spacing:0.5px;">Этапы доставки:</div>
@@ -1320,13 +1321,12 @@
     
     async function saveProf() {
       let b = new FormData(); 
-      b.append('telegram_id', ud.telegram_id); 
       b.append('default_shoe_size', document.getElementById('p-shoe').value); 
       b.append('default_cloth_size', document.getElementById('p-cloth').value);
       b.append('height_cm', document.getElementById('p-h').value); 
       b.append('weight_kg', document.getElementById('p-w').value);
       b.append('cdek_pvz', document.getElementById('p-pvz').value);
-      await fetch('/api/user/save-profile', {method:'POST', body:b}); 
+      await fetch('/api/user/save-profile', {method:'POST', body:b, headers: telegramAuthHeaders()});
       alert('Настройки сохранены'); 
       load();
     }

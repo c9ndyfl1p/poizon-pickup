@@ -6,8 +6,10 @@ services:
       - "127.0.0.1:8000:8000"
     environment:
       BOT_TOKEN: ${BOT_TOKEN:-}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-local-demo-only}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       PRONTO_RATE: ${PRONTO_RATE:-}
+      ALLOW_ANONYMOUS_ORDERS: ${ALLOW_ANONYMOUS_ORDERS:-false}
+      BOT_SETTINGS_TOKEN: ${BOT_SETTINGS_TOKEN:-}
       DATABASE_PATH: /data/orders.sqlite3
     volumes:
       - ./data:/data

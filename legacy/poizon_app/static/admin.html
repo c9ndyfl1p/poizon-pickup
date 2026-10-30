@@ -274,7 +274,7 @@
                 <td><b>#{{ o.id }}</b><br><span style="font-size:10px;color:var(--muted)">{{ o.created_at }}</span></td>
                 <td><b>@{{ o.username }}</b><br><span style="font-size:11px;color:var(--muted)">{{ o.phone }}</span></td>
                 <td><b style="color: var(--accent);">{{ o.cdek_pvz }}</b></td>
-                <td>{{ o.items_html | safe }}</td>
+                <td>{% for item in o.items %}• <b>{{ item.category }}</b> ({{ item.size }}): {% if item.url %}<a href="{{ item.url }}" target="_blank" rel="noopener" style="color: #00E5C9;">Dewu Link</a>{% else %}—{% endif %}<br>{% else %}—{% endfor %}</td>
                 <td><b>{{ o.total_rub }} ₽</b></td>
                 <td>
                   <select onchange="stat({{ o.id }}, this.value)" style="width: 130px;">
@@ -708,8 +708,10 @@
       b.append('pass_price_gold', document.getElementById('s-p-gl').value);
       b.append('pass_price_platinum', document.getElementById('s-p-pl').value);
 
-      await fetch('/admin/settings/save', {method: 'POST', body: b});
-      showToast('Все настройки обновлены');
+      const response = await fetch('/admin/settings/save', {method: 'POST', body: b});
+      const result = await response.json();
+      if (!response.ok) showToast(result.message || 'Настройки сохранены здесь, но Mini App не обновилась');
+      else showToast(result.synced ? 'Настройки обновлены в панели и Mini App' : 'Настройки сохранены; синхронизация Mini App не настроена');
     }
 
     const labels = JSON.parse('{{ stats.chart_labels_json | safe }}');

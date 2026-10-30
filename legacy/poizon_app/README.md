@@ -4,4 +4,6 @@ This folder keeps the source code from the locally deployed ZIP app for referenc
 
 The archive's local `.env`, SQLite databases, uploaded review photos, backups, and Python cache files are intentionally absent. Admin and demo credentials, the Telegram bot token, and the manager's Telegram ID must be provided through environment variables. Authentication stays disabled until a non-empty password is configured.
 
-To run this snapshot locally, install `requirements.txt`, set configuration in a private `.env` file in this directory, then run `uvicorn app:app --host 127.0.0.1 --port 8001` from this directory. Keep `.env`, `database.db`, `database_old.db`, `backups/`, and `static/uploads/` private.
+Requires Python 3.11 or newer. To run this snapshot locally, install `requirements.txt`, set configuration in a private `.env` file in this directory, then run `uvicorn app:app --host 127.0.0.1 --port 8001` from this directory. Keep `.env`, `database.db`, `database_old.db`, `backups/`, and `static/uploads/` private.
+
+To keep the current app's calculator in sync with tariff changes made in this panel, set `POIZON_PICKUP_SETTINGS_URL` to the current app's `/api/bot/settings` endpoint and use the same `BOT_SETTINGS_TOKEN` in both applications. After saving settings, this app sends the Pronto rate, buffer, commission rates, minimums, and paid-order threshold to the current app. The new app stores those values in its own SQLite database.

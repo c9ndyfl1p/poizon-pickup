@@ -1,0 +1,11 @@
+fastapi==0.162.0
+starlette==1.10.0
+uvicorn==0.54.0
+SQLAlchemy>=2.0,<3
+requests>=2.31,<3
+APScheduler>=3.10,<4
+qrcode[pil]>=7.4,<9
+reportlab>=4.0,<5
+Jinja2>=3.1,<4
+python-multipart>=0.0.20,<1
+python-dotenv>=1.0,<2
