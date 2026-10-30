@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>PoizonPickUP! Admin Login</title>
+  <style>
+    :root {
+      --bg: #07080a;
+      --surface: rgba(255, 255, 255, 0.05);
+      --border: rgba(255, 255, 255, 0.12);
+      --accent: #00E5C9;
+      --accent-glow: rgba(0, 229, 201, 0.35);
+      --text: #FFFFFF;
+      --muted: rgba(235, 235, 245, 0.55);
+      --danger: #FF453A;
+      --blur: blur(40px) saturate(190%);
+      --spring: cubic-bezier(0.32, 0.72, 0, 1);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif; -webkit-tap-highlight-color: transparent; }
+    
+    body {
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .login-card {
+      width: 100%;
+      max-width: 400px;
+      background: var(--surface);
+      backdrop-filter: var(--blur);
+      -webkit-backdrop-filter: var(--blur);
+      border: 0.5px solid var(--border);
+      border-radius: 28px;
+      padding: 32px 28px;
+      box-shadow: 0 30px 70px rgba(0,0,0,0.6);
+      text-align: center;
+    }
+
+    .logo-text {
+      font-size: 24px;
+      font-weight: 800;
+      letter-spacing: -0.6px;
+      margin-bottom: 6px;
+    }
+    .logo-text span { color: var(--accent); }
+
+    .subtitle {
+      font-size: 13px;
+      color: var(--muted);
+      margin-bottom: 26px;
+    }
+
+    .field {
+      text-align: left;
+      margin-bottom: 16px;
+    }
+    label {
+      display: block;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+      margin-bottom: 6px;
+    }
+    input[type="text"], input[type="password"] {
+      width: 100%;
+      background: rgba(0, 0, 0, 0.45);
+      border: 0.5px solid var(--border);
+      border-radius: 14px;
+      padding: 13px 16px;
+      color: #fff;
+      font-size: 14px;
+      outline: none;
+      transition: all 0.25s ease;
+    }
+    input[type="text"]:focus, input[type="password"]:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+
+    /* Чекбокс Запомнить меня */
+    .remember-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin: 18px 2px 22px;
+      user-select: none;
+      cursor: pointer;
+    }
+    .remember-text {
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .square-checkbox {
+      appearance: none;
+      -webkit-appearance: none;
+      width: 22px;
+      height: 22px;
+      border: 1.5px solid var(--border);
+      border-radius: 7px;
+      background: rgba(120,120,128,0.1);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s var(--spring);
+      position: relative;
+    }
+    .square-checkbox:checked {
+      background: var(--accent);
+      border-color: var(--accent);
+      box-shadow: 0 2px 10px var(--accent-glow);
+    }
+    .square-checkbox:checked::after {
+      content: '';
+      position: absolute;
+      width: 5px;
+      height: 10px;
+      border: solid #000;
+      border-width: 0 2.2px 2.2px 0;
+      transform: rotate(45deg);
+      top: 3px;
+    }
+
+    .btn {
+      width: 100%;
+      background: linear-gradient(135deg, var(--accent) 0%, #00B8A2 100%);
+      color: #000;
+      font-size: 15px;
+      font-weight: 700;
+      padding: 14px;
+      border-radius: 14px;
+      border: none;
+      cursor: pointer;
+      box-shadow: 0 6px 20px var(--accent-glow);
+      transition: transform 0.2s var(--spring);
+    }
+    .btn:active { transform: scale(0.97); }
+
+    .error-msg {
+      margin-top: 16px;
+      font-size: 13px;
+      color: var(--danger);
+      display: none;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="login-card">
+    <div class="logo-text">PoizonPick<span>UP!</span></div>
+    <div class="subtitle">Control Center Dashboard</div>
+
+    <form onsubmit="handleLogin(event)">
+      <div class="field">
+        <label>Логин</label>
+        <input type="text" id="username" placeholder="Введите логин" required autofocus>
+      </div>
+
+      <div class="field">
+        <label>Пароль</label>
+        <input type="password" id="password" placeholder="Введите пароль" required>
+      </div>
+
+      <div class="remember-row" onclick="toggleRemember(event)">
+        <span class="remember-text">Запомнить это устройство</span>
+        <input type="checkbox" id="remember" class="square-checkbox" checked>
+      </div>
+
+      <button type="submit" class="btn" id="btn-submit">Войти в систему</button>
+      <div id="error-box" class="error-msg">Неверный логин или пароль</div>
+    </form>
+  </div>
+
+  <script>
+    function toggleRemember(e) {
+      const chk = document.getElementById('remember');
+      if (e.target !== chk) chk.checked = !chk.checked;
+    }
+
+    async function handleLogin(e) {
+      e.preventDefault();
+      const errBox = document.getElementById('error-box');
+      errBox.style.display = 'none';
+
+      const un = document.getElementById('username').value.trim();
+      const pw = document.getElementById('password').value.trim();
+      const remember = document.getElementById('remember').checked;
+
+      const fd = new FormData();
+      fd.append('username', un);
+      fd.append('password', pw);
+      fd.append('remember', remember ? 'true' : 'false');
+
+      try {
+        const res = await fetch('/admin/auth/login', { method: 'POST', body: fd });
+        const data = await res.json();
+
+        if (res.ok && data.status === 'ok') {
+          window.location.href = '/admin';
+        } else {
+          errBox.innerText = data.message || 'Неверный логин или пароль';
+          errBox.style.display = 'block';
+        }
+      } catch (err) {
+        errBox.innerText = 'Ошибка соединения с сервером';
+        errBox.style.display = 'block';
+      }
+    }
+  </script>
+</body>
+</html>

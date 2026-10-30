@@ -2,3 +2,6 @@
 data/
 __pycache__/
 *.py[cod]
+legacy/poizon_app/database*.db
+legacy/poizon_app/backups/
+legacy/poizon_app/static/uploads/

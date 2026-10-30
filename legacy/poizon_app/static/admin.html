@@ -1,0 +1,763 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>PoizonPickUP! Control Center</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root { 
+      --bg: #07080a; 
+      --surface: rgba(255, 255, 255, 0.05); 
+      --surface-elevated: rgba(255, 255, 255, 0.08);
+      --border: rgba(255, 255, 255, 0.12); 
+      --accent: #00E5C9; 
+      --accent-glow: rgba(0, 229, 201, 0.35);
+      --accent-orange: #ff790e;
+      --orange-glow: rgba(255, 121, 14, 0.35);
+      --text: #f5f5f7; 
+      --muted: rgba(235, 235, 245, 0.55); 
+      --danger: #FF453A;
+      --success: #30D158;
+      --glass-bg: rgba(14, 16, 20, 0.85);
+      --blur: blur(40px) saturate(190%);
+      --spring: cubic-bezier(0.32, 0.72, 0, 1);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif; -webkit-tap-highlight-color: transparent; }
+    
+    body { 
+      background: var(--bg); 
+      color: var(--text); 
+      padding: 95px 16px 40px; 
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+    }
+
+    .admin-container { width: 100%; max-width: 1240px; }
+
+    .admin-header-nav {
+      position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
+      width: calc(100% - 32px); max-width: 980px; background: var(--glass-bg);
+      backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur);
+      border: 0.5px solid var(--border); border-radius: 35px; display: flex; 
+      justify-content: space-between; align-items: center; padding: 5px 8px; z-index: 1000;
+      box-shadow: 0 15px 35px rgba(0,0,0,0.3); overflow-x: auto;
+    }
+    .admin-header-nav::-webkit-scrollbar { display: none; }
+
+    .nav-pills { display: flex; gap: 4px; }
+    .nav-pills button {
+      padding: 10px 14px; border: none; background: transparent; color: var(--muted);
+      font-size: 13px; font-weight: 600; border-radius: 25px; cursor: pointer; 
+      transition: all 0.25s var(--spring); white-space: nowrap;
+    }
+    .nav-pills button:active { transform: scale(0.95); }
+    .nav-pills button.active { color: #000; background: var(--accent); box-shadow: 0 4px 15px var(--accent-glow); }
+    
+    .header-actions { display: flex; gap: 8px; align-items: center; }
+
+    .demo-badge {
+      background: rgba(255, 121, 14, 0.2); color: var(--accent-orange);
+      border: 1px solid var(--accent-orange); padding: 6px 12px; border-radius: 20px;
+      font-size: 11px; font-weight: 700; letter-spacing: 0.5px; white-space: nowrap;
+    }
+
+    .btn-logout {
+      background: rgba(255, 69, 58, 0.15); border: 0.5px solid rgba(255, 69, 58, 0.4);
+      color: var(--danger); padding: 8px 14px; border-radius: 20px; font-size: 12px; font-weight: 700;
+      cursor: pointer; text-decoration: none; display: inline-flex;
+    }
+    .btn-logout:hover { background: var(--danger); color: #fff; }
+
+    .tab-pane { display: none; opacity: 0; transform: translate3d(0, 12px, 0); transition: all 0.3s var(--spring); }
+    .tab-pane.active { display: block; opacity: 1; transform: translate3d(0, 0, 0); }
+
+    .card { 
+      background: var(--surface); border: 0.5px solid var(--border); 
+      border-radius: 24px; padding: 22px; margin-bottom: 20px; 
+    }
+    h1 { font-size: 24px; margin-bottom: 20px; font-weight: 800; letter-spacing: -0.5px; }
+    h2 { font-size: 16px; margin-bottom: 14px; font-weight: 700; color: var(--accent); }
+    h2.orange-head { color: var(--accent-orange); }
+
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; }
+    .stat-box { 
+      background: rgba(0,0,0,0.35); padding: 18px; border-radius: 18px; border: 0.5px solid var(--border); 
+    }
+    .stat-box div { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+    .stat-box b { font-size: 22px; color: var(--text); font-weight: 800; }
+    
+    .trend-tag { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 10px; margin-left: 6px; }
+    .trend-up { background: rgba(48, 209, 88, 0.15); color: var(--success); }
+    .trend-down { background: rgba(255, 69, 58, 0.15); color: var(--danger); }
+
+    label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 6px; font-weight: 600; text-transform: uppercase; }
+    input, select, textarea { 
+      width: 100%; background: rgba(0,0,0,0.4); border: 0.5px solid var(--border); border-radius: 12px; padding: 12px 14px; color: #fff; font-size: 14px; outline: none; 
+    }
+    input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+
+    .search-input { padding: 14px 18px; font-size: 14px; margin-bottom: 16px; border-radius: 16px; background: rgba(0,0,0,0.5); }
+    .btn { background: #fff; color: #000; padding: 12px 18px; border-radius: 12px; border: none; cursor: pointer; font-size: 13px; font-weight: 700; transition: transform 0.2s; }
+    .btn:active { transform: scale(0.97); }
+    .btn-danger { background: var(--danger); color: #fff; }
+    .btn-accent { background: var(--accent); color: #000; }
+    .btn-orange { background: var(--accent-orange); color: #000; }
+
+    .funnel-bar-wrap { margin-bottom: 12px; }
+    .funnel-bar-header { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 5px; }
+    .funnel-track { width: 100%; height: 10px; background: rgba(255,255,255,0.06); border-radius: 8px; overflow: hidden; }
+    .funnel-fill { height: 100%; border-radius: 8px; background: linear-gradient(90deg, var(--accent), var(--accent-orange)); }
+
+    .table-container { width: 100%; overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 14px 12px; border-bottom: 0.5px solid var(--border); text-align: left; vertical-align: middle; }
+    th { color: var(--muted); font-size: 11px; text-transform: uppercase; font-weight: 700; }
+
+    .del-btn-mini {
+      background: rgba(255, 69, 58, 0.15); border: 0.5px solid rgba(255, 69, 58, 0.4);
+      color: var(--danger); padding: 7px 12px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer;
+    }
+
+    .manager-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 0.5px solid rgba(255, 69, 58, 0.25);
+      padding: 4px 8px;
+      border-radius: 14px;
+    }
+    .manager-badge img {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      object-fit: cover;
+      background: #000;
+    }
+
+    #toast {
+      position: fixed; bottom: 25px; right: 25px; background: rgba(30, 30, 35, 0.95);
+      border: 0.5px solid var(--border); color: #fff; padding: 12px 20px; border-radius: 14px;
+      transform: translateY(80px); transition: transform 0.3s var(--spring); z-index: 2000;
+    }
+    #toast.show { transform: translateY(0); }
+  </style>
+</head>
+<body>
+
+  <header class="admin-header-nav">
+    <nav class="nav-pills">
+      <button class="active" onclick="showTab('stats', this)">Статистика</button>
+      <button onclick="showTab('orders', this)">Заказы</button>
+      <button onclick="showTab('clients', this)">Клиенты</button>
+      <button onclick="showTab('reviews', this)">Отзывы</button>
+      {% if not is_demo %}
+      <button onclick="showTab('broadcast', this)">Рассылка</button>
+      {% endif %}
+      <button onclick="showTab('settings', this)">Настройки</button>
+    </nav>
+    <div class="header-actions">
+      {% if is_demo %}
+        <span class="demo-badge">DEMO РЕЖИМ</span>
+      {% else %}
+        <button class="btn" style="padding: 8px 12px; font-size: 11px;" onclick="document.getElementById('backup-upload-input').click()">Бэкап</button>
+        <input type="file" id="backup-upload-input" accept=".db" style="display: none;" onchange="handleRestoreBackup(event)">
+        <a href="/admin/backup/download" target="_blank" style="text-decoration: none;">
+          <button class="btn btn-orange" style="padding: 8px 12px; font-size: 11px;">Скачать DB</button>
+        </a>
+      {% endif %}
+      <a href="/admin/logout" class="btn-logout">Выйти</a>
+    </div>
+  </header>
+
+  <main class="admin-container">
+    <!-- ВКЛАДКА 1: СТАТИСТИКА -->
+    <section id="tab-stats" class="tab-pane active">
+      <h1>Обзор платформы и Аналитика</h1>
+      
+      <div class="card">
+        <h2>Сравнение с прошлым месяцем (MoM)</h2>
+        <div class="grid">
+          <div class="stat-box">
+            <div>Выручка за текущий месяц</div>
+            <b>{{ stats.current_month_rev }} ₽</b>
+            <span class="trend-tag {% if stats.rev_growth_mom >= 0 %}trend-up{% else %}trend-down{% endif %}">
+              {% if stats.rev_growth_mom >= 0 %}+{% endif %}{{ stats.rev_growth_mom }}%
+            </span>
+          </div>
+          <div class="stat-box">
+            <div>Выручка за прошлый месяц</div>
+            <b>{{ stats.prev_month_rev }} ₽</b>
+          </div>
+          <div class="stat-box">
+            <div>Заказов в текущем месяце</div>
+            <b>{{ stats.current_month_orders }} шт</b>
+            <span class="trend-tag {% if stats.orders_growth_mom >= 0 %}trend-up{% else %}trend-down{% endif %}">
+              {% if stats.orders_growth_mom >= 0 %}+{% endif %}{{ stats.orders_growth_mom }}%
+            </span>
+          </div>
+          <div class="stat-box">
+            <div>Заказов в прошлом месяце</div>
+            <b>{{ stats.prev_month_orders }} шт</b>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="border-color: rgba(255, 121, 14, 0.4);">
+        <h2 class="orange-head">Финансовая доходность и маржинальность</h2>
+        <div class="grid" style="margin-bottom: 20px;">
+          <div class="stat-box"><div>Выручка от комиссий</div><b style="color: var(--accent-orange);">{{ stats.prof }} ₽</b></div>
+          <div class="stat-box"><div>Средний чек</div><b>{{ stats.avg_check }} ₽</b></div>
+          <div class="stat-box"><div>Себестоимость товаров</div><b>{{ stats.expenses }} ₽</b></div>
+          <div class="stat-box"><div>Чистая маржинальность</div><b style="color: var(--success);">{{ stats.margin }}%</b></div>
+        </div>
+        <h2 style="font-size: 14px; margin-bottom: 8px;">График финансовой доходности (тыс. ₽)</h2>
+        <canvas id="profChartThousands" height="180"></canvas>
+      </div>
+
+      <div class="grid">
+        <div class="card">
+          <h2>Оборот заказов (7 дней)</h2>
+          <canvas id="revChart" height="200"></canvas>
+        </div>
+        <div class="card">
+          <h2>Статусы заказов</h2>
+          <canvas id="statusDoughnutChart" height="200"></canvas>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Воронка заказов по ключевым этапам</h2>
+        {% set max_count = stats.funnel_stages[0].count if stats.funnel_stages[0].count > 0 else 1 %}
+        {% for st in stats.funnel_stages %}
+        <div class="funnel-bar-wrap">
+          <div class="funnel-bar-header">
+            <span>{{ st.name }}</span>
+            <b>{{ st.count }} заказов</b>
+          </div>
+          <div class="funnel-track">
+            <div class="funnel-fill" style="width: {{ (st.count / max_count * 100)|round(1) }}%;"></div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+
+      <div class="card">
+        <h2>Сравнение заказов: Новые vs Повторные клиенты</h2>
+        <canvas id="clientCohortChart" height="180"></canvas>
+      </div>
+    </section>
+
+    <!-- ВКЛАДКА 2: ЗАКАЗЫ -->
+    <section id="tab-orders" class="tab-pane">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <h1>Управление заказами</h1>
+        <button class="btn btn-danger" onclick="deleteBatchSelected()" style="display: none;" id="btn-batch-del">Удалить выбранные</button>
+      </div>
+
+      <div class="card">
+        <input type="text" id="order-search" class="search-input" placeholder="Поиск по ID, клиенту, треку..." onkeyup="filterOrdersTable()">
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 30px;"><input type="checkbox" id="th-check-all" onchange="toggleSelectAllOrders(this)"></th>
+                <th>ID / Дата</th><th>Клиент</th><th>ПВЗ СДЭК</th><th>Товары</th><th>Сумма</th><th>Статус</th><th>Доставка</th><th>Трек</th><th>Действие</th>
+              </tr>
+            </thead>
+            <tbody id="orders-tbody">
+              {% for o in orders %}
+              <tr data-order-row id="row-order-{{ o.id }}">
+                <td><input type="checkbox" class="order-chk" value="{{ o.id }}" onchange="updateBatchDelBtn()"></td>
+                <td><b>#{{ o.id }}</b><br><span style="font-size:10px;color:var(--muted)">{{ o.created_at }}</span></td>
+                <td><b>@{{ o.username }}</b><br><span style="font-size:11px;color:var(--muted)">{{ o.phone }}</span></td>
+                <td><b style="color: var(--accent);">{{ o.cdek_pvz }}</b></td>
+                <td>{{ o.items_html | safe }}</td>
+                <td><b>{{ o.total_rub }} ₽</b></td>
+                <td>
+                  <select onchange="stat({{ o.id }}, this.value)" style="width: 130px;">
+                    {% for s in ["Новый", "Оплачен", "Выкуплен", "На складе в Китае", "СДЭК", "Выдан", "Отменен"] %}
+                    <option value="{{ s }}" {% if o.status == s %}selected{% endif %}>{{ s }}</option>
+                    {% endfor %}
+                  </select>
+                </td>
+                <td><input type="number" value="{{ o.delivery_rub }}" onchange="deliv({{ o.id }}, this.value)" style="width:80px;"></td>
+                <td><input type="text" value="{{ o.cdek_track }}" onchange="track({{ o.id }}, this.value)" style="width:110px;"></td>
+                <td><button class="del-btn-mini" onclick="deleteSingleOrder({{ o.id }})">Удалить</button></td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ВКЛАДКА 3: КЛИЕНТЫ -->
+    <section id="tab-clients" class="tab-pane">
+      <h1>База клиентов (Всего: {{ stats.clients_total }})</h1>
+      <div class="card">
+        <h2>Добавить клиента вручную</h2>
+        <form onsubmit="manualCreateU(event)">
+          <div class="grid" style="align-items: flex-end;">
+            <div><label>TG ID</label><input type="number" id="n-tg" required></div>
+            <div><label>Username</label><input type="text" id="n-un" placeholder="misha_p"></div>
+            <div><label>Статус</label>
+              <select id="n-st">
+                <option value="Новый">Новый</option>
+                <option value="Постоянный" selected>Постоянный</option>
+                <option value="Привилегированный">Привилегированный</option>
+              </select>
+            </div>
+            <div><label>Заказов (шт)</label><input type="number" id="n-ord" value="1"></div>
+            <div><label>Сумма выкупов (₽)</label><input type="number" id="n-sp" value="0"></div>
+            <button type="submit" class="btn btn-accent">Добавить</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="card">
+        <input type="text" id="client-search" class="search-input" placeholder="Поиск по никнейму, ID, телефону..." onkeyup="filterClientsTable()">
+        <div class="table-container">
+          <table>
+            <thead><tr><th>Пользователь</th><th>Связь / ПВЗ</th><th>Статус</th><th>Заказов</th><th>Сумма</th><th>PPU Pass</th><th>Действие</th></tr></thead>
+            <tbody id="clients-tbody">
+              {% for u in users %}
+              <tr data-client-row>
+                <td><input type="text" id="u-{{ u.id }}" value="{{ u.username }}" style="width: 110px;"><div style="font-size:10px;color:var(--muted);margin-top:4px;">ID: {{ u.telegram_id }}</div></td>
+                <td>{{ u.phone or '-' }}<br><span style="color:var(--accent);">{{ u.cdek_pvz or '-' }}</span></td>
+                <td>
+                  <select id="st-{{ u.id }}" style="width: 130px;">
+                    <option value="Новый" {% if u.client_status=='Новый' %}selected{% endif %}>Новый</option>
+                    <option value="Постоянный" {% if u.client_status=='Постоянный' %}selected{% endif %}>Постоянный</option>
+                    <option value="Привилегированный" {% if u.client_status=='Привилегированный' %}selected{% endif %}>Привилегированный</option>
+                  </select>
+                </td>
+                <td><input type="number" id="oc-{{ u.id }}" value="{{ u.orders_count }}" style="width: 60px;"></td>
+                <td><input type="number" id="sp-{{ u.id }}" value="{{ u.total_spent }}" style="width: 90px;"></td>
+                <td><div style="display:flex;gap:4px;"><select id="ps-{{ u.id }}" style="width: 90px;"><option value="None" {% if not u.pass_tier %}selected{% endif %}>Нет</option><option value="Bronze" {% if u.pass_tier=='Bronze' %}selected{% endif %}>Bronze</option><option value="Silver" {% if u.pass_tier=='Silver' %}selected{% endif %}>Silver</option><option value="Gold" {% if u.pass_tier=='Gold' %}selected{% endif %}>Gold</option><option value="Platinum" {% if u.pass_tier=='Platinum' %}selected{% endif %}>Platinum</option><option value="Reset">Сброс</option></select><input type="number" id="sl-{{ u.id }}" value="{{ u.pass_slots }}" style="width:50px;" placeholder="Слоты"></div></td>
+                <td><button class="btn" style="padding: 8px 12px; font-size:11px;" onclick="saveU({{ u.id }})">Сохранить</button></td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ВКЛАДКА 4: ОТЗЫВЫ -->
+    <section id="tab-reviews" class="tab-pane">
+      <h1>Отзывы и Конструктор витрины</h1>
+      
+      <div class="card" style="border-color: rgba(0, 229, 201, 0.4);">
+        <h2>+ Добавить отзыв на витрину приложения</h2>
+        <form onsubmit="handleCreateShowcaseReview(event)" enctype="multipart/form-data">
+          <div class="grid" style="margin-bottom: 14px;">
+            <div><label>Имя / Никнейм (напр. "Михаил П." или "Аноним")</label><input type="text" id="rev-un" placeholder="Михаил П." required></div>
+            <div><label>Выкупленных заказов</label><input type="number" id="rev-oc" value="3" required></div>
+            <div><label>Оценка (звёзды 1-5)</label><input type="number" id="rev-rt" min="1" max="5" value="5" required></div>
+          </div>
+          <div class="grid" style="margin-bottom: 14px;">
+            <div>
+              <label>Дата отзыва (оставьте пустым для текущей)</label>
+              <input type="datetime-local" id="rev-dt">
+            </div>
+            <div>
+              <label>Фото товара (необязательно)</label>
+              <input type="file" id="rev-ph" accept="image/*">
+            </div>
+          </div>
+          <div class="field" style="margin-bottom: 16px;">
+            <label>Текст отзыва</label>
+            <textarea id="rev-tx" rows="2" placeholder="Заказывал Jordan 4. Доехали быстро, оригинал 100%!" required></textarea>
+          </div>
+          <button type="submit" class="btn btn-accent" id="btn-add-rev">Опубликовать отзыв</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <h2>Опубликованные отзывы (с возможностью изменения даты)</h2>
+        <div class="table-container">
+          <table>
+            <thead><tr><th>Клиент</th><th>Заказов</th><th>Оценка</th><th>Лайк менеджера</th><th>Дата написания</th><th>Текст</th><th>Фото</th><th>Действие</th></tr></thead>
+            <tbody>
+              {% for r in showcase_reviews %}
+              <tr>
+                <td><b>{{ r.username }}</b></td>
+                <td>{{ r.orders_count }} шт</td>
+                <td><b style="color: #FFD60A;">{{ r.rating }} ★</b></td>
+                <td>
+                  <div class="manager-badge" title="Одобрено сервисом">
+                    <img src="/static/logo.jpg" alt="PPU" onerror="this.src='https://via.placeholder.com/18/000000/00E5C9?text=PPU'">
+                    <span style="color: #FF3B30; font-size: 13px;">❤️</span>
+                  </div>
+                </td>
+                <td>
+                  <input type="text" id="rev-date-{{ r.id }}" value="{{ r.created_at.strftime('%Y-%m-%d %H:%M') if r.created_at else '' }}" style="width: 130px; font-size:11px; padding: 6px;">
+                  <button class="btn" style="padding: 4px 8px; font-size:10px; margin-top: 4px;" onclick="updateRevDate({{ r.id }})">Изм. дату</button>
+                </td>
+                <td style="max-width: 250px;">{{ r.review_text }}</td>
+                <td>{% if r.photo_url %}<a href="{{ r.photo_url }}" target="_blank" style="color:var(--accent);">Смотреть</a>{% else %}—{% endif %}</td>
+                <td><button class="del-btn-mini" onclick="deleteShowcaseRev({{ r.id }})">Удалить</button></td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ВКЛАДКА 5: МАССОВАЯ РАССЫЛКА -->
+    {% if not is_demo %}
+    <section id="tab-broadcast" class="tab-pane">
+      <h1>Массовая рассылка</h1>
+      <div class="card">
+        <form onsubmit="handleBroadcast(event)">
+          <div class="field" style="margin-bottom: 14px;">
+            <label>Текст сообщения (поддерживает HTML: &lt;b&gt;, &lt;i&gt;, ссылки)</label>
+            <textarea id="broadcast-msg-text" rows="5" placeholder="Напишите текст для всех пользователей бота..." required></textarea>
+          </div>
+          <button type="submit" class="btn btn-accent" id="btn-broadcast-submit">Отправить рассылку</button>
+        </form>
+      </div>
+    </section>
+    {% endif %}
+
+    <!-- ВКЛАДКА 6: НАСТРОЙКИ (С УПРАВЛЕНИЕМ СРОКОМ ДОСТАВКИ) -->
+    <section id="tab-settings" class="tab-pane">
+      <h1>Настройки платформы</h1>
+      
+      <div class="card">
+        <form onsubmit="saveSets(event)">
+          <h2>Сроки доставки, курсы валют и Welcome-бонус</h2>
+          <div class="grid" style="margin-bottom: 18px;">
+            <div>
+              <label>Срок доставки в днях (0 = Авто)</label>
+              <input type="number" id="s-del-days" value="{{ settings.custom_delivery_days or 0 }}" placeholder="0 - расчет по заказам">
+            </div>
+            <div><label>Курс ¥ (Юань)</label><input type="number" step="0.01" id="s-cny" value="{{ settings.cny_rate }}"></div>
+            <div><label>Буфер курса (+ ₽)</label><input type="number" step="0.01" id="s-buf" value="{{ settings.buffer_rate }}"></div>
+            <div><label>Welcome-бонус (₽)</label><input type="number" id="s-w-rub" value="{{ settings.welcome_bonus_rub }}"></div>
+            <div><label>Срок бонуса (часов)</label><input type="number" id="s-w-h" value="{{ settings.welcome_bonus_hours }}"></div>
+            <div>
+              <label>Welcome-бонус включен</label>
+              <select id="s-w-on">
+                <option value="true" {% if settings.welcome_bonus_enabled %}selected{% endif %}>Включен</option>
+                <option value="false" {% if not settings.welcome_bonus_enabled %}selected{% endif %}>Отключен</option>
+              </select>
+            </div>
+            <div><label>Порог "Постоянного" (заказов)</label><input type="number" id="s-reg-th" value="{{ settings.regular_threshold }}"></div>
+          </div>
+
+          <h2>Комиссии: Новые клиенты</h2>
+          <div class="grid" style="margin-bottom: 18px;">
+            <div><label>Обувь: Процент (%)</label><input type="number" step="0.1" id="s-f-n-sp" value="{{ settings.fee_new_shoes_percent }}"></div>
+            <div><label>Обувь: Мин. сумма (₽)</label><input type="number" id="s-f-n-sm" value="{{ settings.fee_new_shoes_min }}"></div>
+            <div><label>Одежда: Процент (%)</label><input type="number" step="0.1" id="s-f-n-cp" value="{{ settings.fee_new_clothes_percent }}"></div>
+            <div><label>Одежда: Мин. сумма (₽)</label><input type="number" id="s-f-n-cm" value="{{ settings.fee_new_clothes_min }}"></div>
+          </div>
+
+          <h2>Комиссии: Постоянные клиенты</h2>
+          <div class="grid" style="margin-bottom: 18px;">
+            <div><label>Обувь: Процент (%)</label><input type="number" step="0.1" id="s-f-r-sp" value="{{ settings.fee_regular_shoes_percent }}"></div>
+            <div><label>Обувь: Мин. сумма (₽)</label><input type="number" id="s-f-r-sm" value="{{ settings.fee_regular_shoes_min }}"></div>
+            <div><label>Одежда: Процент (%)</label><input type="number" step="0.1" id="s-f-r-cp" value="{{ settings.fee_regular_clothes_percent }}"></div>
+            <div><label>Одежда: Мин. сумма (₽)</label><input type="number" id="s-f-r-cm" value="{{ settings.fee_regular_clothes_min }}"></div>
+          </div>
+
+          <h2>Цены абонементов PPU Pass (₽)</h2>
+          <div class="grid" style="margin-bottom: 20px;">
+            <div><label>Bronze Pass (3 выкупа)</label><input type="number" id="s-p-br" value="{{ settings.pass_price_bronze }}"></div>
+            <div><label>Silver Pass (5 выкупов)</label><input type="number" id="s-p-sl" value="{{ settings.pass_price_silver }}"></div>
+            <div><label>Gold Pass (8 выкупов)</label><input type="number" id="s-p-gl" value="{{ settings.pass_price_gold }}"></div>
+            <div><label>Platinum Pass (12 выкупов)</label><input type="number" id="s-p-pl" value="{{ settings.pass_price_platinum }}"></div>
+          </div>
+
+          <button type="submit" class="btn btn-accent" style="width: auto; padding: 14px 28px;">Сохранить все настройки</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <h2>Генератор промокодов</h2>
+        <form onsubmit="createPromo(event)" style="display: flex; gap: 12px; align-items: flex-end; margin-bottom: 16px; flex-wrap: wrap;">
+          <div><label>Код</label><input type="text" id="p-code" required placeholder="SALE500" style="text-transform: uppercase;"></div>
+          <div><label>Скидка (₽)</label><input type="number" id="p-disc" required placeholder="500"></div>
+          <div><label>Дней действия</label><input type="number" id="p-days" value="30"></div>
+          <button type="submit" class="btn btn-orange">Создать промокод</button>
+        </form>
+        <div class="table-container">
+          <table>
+            <thead><tr><th>Код</th><th>Скидка</th><th>Истекает</th></tr></thead>
+            <tbody>
+              {% for p in promos %}
+              <tr><td><b>{{ p.code }}</b></td><td>{{ p.discount_rub }} ₽</td><td>{{ p.expires_str }}</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast">Сохранено</div>
+
+  <script>
+    function showTab(id, btn) {
+      document.querySelectorAll('.tab-pane').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.admin-header-nav button').forEach(b => b.classList.remove('active'));
+      document.getElementById('tab-' + id).classList.add('active');
+      btn.classList.add('active');
+    }
+
+    function showToast(msg) {
+      const t = document.getElementById('toast');
+      t.innerText = msg;
+      t.classList.add('show');
+      setTimeout(() => t.classList.remove('show'), 2500);
+    }
+
+    function filterOrdersTable() {
+      const q = document.getElementById('order-search').value.toLowerCase();
+      document.querySelectorAll('#orders-tbody tr[data-order-row]').forEach(tr => {
+        tr.style.display = tr.innerText.toLowerCase().includes(q) ? '' : 'none';
+      });
+    }
+
+    function filterClientsTable() {
+      const q = document.getElementById('client-search').value.toLowerCase();
+      document.querySelectorAll('#clients-tbody tr[data-client-row]').forEach(tr => {
+        const text = tr.innerText.toLowerCase();
+        const unInput = tr.querySelector('input[type="text"]')?.value.toLowerCase() || '';
+        tr.style.display = (text.includes(q) || unInput.includes(q)) ? '' : 'none';
+      });
+    }
+
+    function toggleSelectAllOrders(master) {
+      document.querySelectorAll('.order-chk').forEach(c => c.checked = master.checked);
+      updateBatchDelBtn();
+    }
+
+    function updateBatchDelBtn() {
+      const checkedCount = document.querySelectorAll('.order-chk:checked').length;
+      const btn = document.getElementById('btn-batch-del');
+      if (btn) {
+        btn.style.display = checkedCount > 0 ? 'block' : 'none';
+        btn.innerText = `Удалить выбранные (${checkedCount})`;
+      }
+    }
+
+    async function deleteSingleOrder(id) {
+      if (!confirm(`Удалить заказ #${id}?`)) return;
+      let b = new FormData(); b.append('order_id', id);
+      let r = await fetch('/admin/order/delete', {method: 'POST', body: b});
+      if (r.ok) {
+        document.getElementById(`row-order-${id}`)?.remove();
+        showToast(`Заказ #${id} удален`);
+      }
+    }
+
+    async function deleteBatchSelected() {
+      const ids = Array.from(document.querySelectorAll('.order-chk:checked')).map(c => parseInt(c.value));
+      if (!ids.length || !confirm(`Удалить выбранные заказы (${ids.length} шт)?`)) return;
+      let b = new FormData(); b.append('order_ids', JSON.stringify(ids));
+      let r = await fetch('/admin/order/delete-batch', {method: 'POST', body: b});
+      if (r.ok) {
+        ids.forEach(id => document.getElementById(`row-order-${id}`)?.remove());
+        updateBatchDelBtn();
+        showToast(`Удалено ${ids.length} заказов`);
+      }
+    }
+
+    async function stat(id, s) { 
+      let b = new FormData(); b.append('order_id', id); b.append('status', s); 
+      await fetch('/admin/order/update-status', {method: 'POST', body: b}); 
+      showToast('Статус изменён');
+    }
+
+    async function deliv(id, v) { 
+      let b = new FormData(); b.append('order_id', id); b.append('delivery_rub', v); 
+      await fetch('/admin/order/set-delivery', {method: 'POST', body: b}); 
+      showToast('Счет выставлен');
+    }
+
+    async function track(id, v) { 
+      let b = new FormData(); b.append('order_id', id); b.append('track', v); 
+      await fetch('/admin/order/set-track', {method: 'POST', body: b}); 
+      showToast('Трек сохранен');
+    }
+
+    async function saveU(id) {
+      let b = new FormData(); 
+      b.append('user_id', id); 
+      b.append('username', document.getElementById('u-'+id).value); 
+      b.append('client_status', document.getElementById('st-'+id).value); 
+      b.append('orders_count', document.getElementById('oc-'+id).value); 
+      b.append('total_spent', document.getElementById('sp-'+id).value); 
+      b.append('pass_tier', document.getElementById('ps-'+id).value); 
+      b.append('pass_slots', document.getElementById('sl-'+id).value);
+      await fetch('/admin/user/update-full', {method: 'POST', body: b}); 
+      showToast('Данные клиента сохранены');
+    }
+
+    async function manualCreateU(e) {
+      e.preventDefault();
+      let b = new FormData(); 
+      b.append('telegram_id', document.getElementById('n-tg').value); 
+      b.append('username', document.getElementById('n-un').value); 
+      b.append('client_status', document.getElementById('n-st').value); 
+      b.append('orders_count', document.getElementById('n-ord').value); 
+      b.append('total_spent', document.getElementById('n-sp').value);
+      await fetch('/admin/user/manual-create', {method: 'POST', body: b}); 
+      showToast('Клиент создан'); 
+      setTimeout(() => location.reload(), 1000);
+    }
+
+    async function handleCreateShowcaseReview(e) {
+      e.preventDefault();
+      const fd = new FormData();
+      fd.append('username', document.getElementById('rev-un').value);
+      fd.append('orders_count', document.getElementById('rev-oc').value);
+      fd.append('rating', document.getElementById('rev-rt').value);
+      fd.append('review_text', document.getElementById('rev-tx').value);
+      fd.append('custom_date', document.getElementById('rev-dt').value);
+
+      const file = document.getElementById('rev-ph').files[0];
+      if (file) fd.append('photo', file);
+
+      const btn = document.getElementById('btn-add-rev');
+      btn.disabled = true;
+
+      const r = await fetch('/admin/reviews/create', { method: 'POST', body: fd });
+      const res = await r.json();
+      alert(res.message);
+      location.reload();
+    }
+
+    async function updateRevDate(id) {
+      const val = document.getElementById('rev-date-' + id).value;
+      const fd = new FormData();
+      fd.append('review_id', id);
+      fd.append('new_date', val);
+      const r = await fetch('/admin/reviews/update-date', { method: 'POST', body: fd });
+      const res = await r.json();
+      if (r.ok) showToast('Дата отзыва обновлена');
+      else alert(res.message || 'Ошибка обновления даты');
+    }
+
+    async function deleteShowcaseRev(id) {
+      if (!confirm('Удалить отзыв?')) return;
+      const fd = new FormData(); fd.append('review_id', id);
+      await fetch('/admin/reviews/delete', { method: 'POST', body: fd });
+      location.reload();
+    }
+
+    async function handleBroadcast(e) {
+      e.preventDefault();
+      const txt = document.getElementById('broadcast-msg-text').value;
+      if (!confirm('Отправить сообщение ВСЕМ пользователям?')) return;
+      const b = new FormData(); b.append('broadcast_text', txt);
+      const r = await fetch('/admin/broadcast', {method: 'POST', body: b});
+      const res = await r.json();
+      alert(res.message);
+      document.getElementById('broadcast-msg-text').value = '';
+    }
+
+    async function handleRestoreBackup(e) {
+      const file = e.target.files[0];
+      if (!file || !confirm(`Восстановить базу из "${file.name}"?`)) return;
+      let b = new FormData(); b.append('backup_file', file);
+      let r = await fetch('/admin/backup/restore', {method: 'POST', body: b});
+      if (r.ok) { alert('База данных успешно восстановлена!'); location.reload(); }
+    }
+
+    async function createPromo(e) { 
+      e.preventDefault(); 
+      let b = new FormData(); 
+      b.append('code', document.getElementById('p-code').value); 
+      b.append('discount_rub', document.getElementById('p-disc').value); 
+      b.append('days', document.getElementById('p-days').value); 
+      await fetch('/admin/promo/create', {method: 'POST', body: b}); 
+      showToast('Промокод добавлен');
+      setTimeout(() => location.reload(), 1000);
+    }
+
+    async function saveSets(e) {
+      e.preventDefault();
+      let b = new FormData();
+      b.append('cny_rate', document.getElementById('s-cny').value);
+      b.append('buffer_rate', document.getElementById('s-buf').value);
+      b.append('welcome_bonus_rub', document.getElementById('s-w-rub').value);
+      b.append('welcome_bonus_hours', document.getElementById('s-w-h').value);
+      b.append('welcome_bonus_enabled', document.getElementById('s-w-on').value);
+      b.append('regular_threshold', document.getElementById('s-reg-th').value);
+      b.append('custom_delivery_days', document.getElementById('s-del-days').value);
+
+      b.append('fee_new_shoes_percent', document.getElementById('s-f-n-sp').value);
+      b.append('fee_new_shoes_min', document.getElementById('s-f-n-sm').value);
+      b.append('fee_new_clothes_percent', document.getElementById('s-f-n-cp').value);
+      b.append('fee_new_clothes_min', document.getElementById('s-f-n-cm').value);
+
+      b.append('fee_regular_shoes_percent', document.getElementById('s-f-r-sp').value);
+      b.append('fee_regular_shoes_min', document.getElementById('s-f-r-sm').value);
+      b.append('fee_regular_clothes_percent', document.getElementById('s-f-r-cp').value);
+      b.append('fee_regular_clothes_min', document.getElementById('s-f-r-cm').value);
+
+      b.append('pass_price_bronze', document.getElementById('s-p-br').value);
+      b.append('pass_price_silver', document.getElementById('s-p-sl').value);
+      b.append('pass_price_gold', document.getElementById('s-p-gl').value);
+      b.append('pass_price_platinum', document.getElementById('s-p-pl').value);
+
+      await fetch('/admin/settings/save', {method: 'POST', body: b});
+      showToast('Все настройки обновлены');
+    }
+
+    const labels = JSON.parse('{{ stats.chart_labels_json | safe }}');
+    const revData = JSON.parse('{{ stats.chart_rev_json | safe }}');
+    const profThousandsData = JSON.parse('{{ stats.chart_prof_thousands_json | safe }}');
+    const newCustData = JSON.parse('{{ stats.new_cust_orders_json | safe }}');
+    const repeatCustData = JSON.parse('{{ stats.repeat_cust_orders_json | safe }}');
+
+    if (document.getElementById('revChart')) {
+      new Chart(document.getElementById('revChart'), {
+        type: 'line',
+        data: { labels: labels, datasets: [{ label: 'Выручка (₽)', data: revData, borderColor: '#00E5C9', backgroundColor: 'rgba(0,229,201,0.1)', fill: true, tension: 0.3 }] },
+        options: { scales: { y: { beginAtZero: true, grid: { color: 'rgba(255,255,255,0.05)' } }, x: { grid: { color: 'rgba(255,255,255,0.05)' } } } }
+      });
+    }
+
+    if (document.getElementById('profChartThousands')) {
+      new Chart(document.getElementById('profChartThousands'), {
+        type: 'bar',
+        data: { labels: labels, datasets: [{ label: 'Доходность (тыс. ₽)', data: profThousandsData, backgroundColor: '#ff790e', borderRadius: 6 }] },
+        options: { scales: { y: { beginAtZero: true, grid: { color: 'rgba(255,255,255,0.05)' } }, x: { grid: { display: false } } } }
+      });
+    }
+
+    if (document.getElementById('statusDoughnutChart')) {
+      new Chart(document.getElementById('statusDoughnutChart'), {
+        type: 'doughnut',
+        data: {
+          labels: JSON.parse('{{ stats.status_labels_json | safe }}'),
+          datasets: [{ data: JSON.parse('{{ stats.status_values_json | safe }}'), backgroundColor: ['#00E5C9', '#30D158', '#0A84FF', '#5E5CE6', '#BF5AF2', '#FF9F0A', '#ff790e', '#FFD60A', '#64D2FF', '#FF453A'], borderWidth: 0 }]
+        },
+        options: { plugins: { legend: { position: 'right', labels: { color: '#f5f5f7', font: { size: 10 } } } } }
+      });
+    }
+
+    if (document.getElementById('clientCohortChart')) {
+      new Chart(document.getElementById('clientCohortChart'), {
+        type: 'bar',
+        data: {
+          labels: labels,
+          datasets: [
+            { label: 'Новые клиенты', data: newCustData, backgroundColor: '#00E5C9', borderRadius: 4 },
+            { label: 'Повторные заказы', data: repeatCustData, backgroundColor: '#ff790e', borderRadius: 4 }
+          ]
+        },
+        options: { scales: { y: { beginAtZero: true, stacked: true, grid: { color: 'rgba(255,255,255,0.05)' } }, x: { stacked: true, grid: { display: false } } } }
+      });
+    }
+  </script>
+</body>
+</html>

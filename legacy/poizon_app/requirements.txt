@@ -1,0 +1,12 @@
+fastapi==0.115.0
+uvicorn==0.30.6
+aiogram==3.13.1
+pydantic==2.9.2
+SQLAlchemy>=2.0,<3
+requests>=2.31,<3
+APScheduler>=3.10,<4
+qrcode[pil]>=7.4,<9
+reportlab>=4.0,<5
+Jinja2>=3.1,<4
+python-multipart>=0.0.9,<1
+python-dotenv>=1.0,<2
